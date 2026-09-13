@@ -14,6 +14,11 @@
     --border: #e0e0e2;
     --ok: #1e8e3e;
     --err: #c5221f;
+    --key-off: #e4e4e7;
+    --key-off-text: #8a8a90;
+    --key-on: #ffd54a;
+    --key-on-text: #3a2c00;
+    --bar-off: #d6d6da;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -24,6 +29,11 @@
       --border: #3a3b3e;
       --ok: #3ddc73;
       --err: #ff6b64;
+      --key-off: #2d2e32;
+      --key-off-text: #6c6d72;
+      --key-on: #ffd54a;
+      --key-on-text: #3a2c00;
+      --bar-off: #303136;
     }
   }
   * { box-sizing: border-box; }
@@ -74,6 +84,61 @@
   .badge.ok { background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
   .badge.err { background: color-mix(in srgb, var(--err) 18%, transparent); color: var(--err); }
   .muted { color: var(--muted); }
+
+  .deck {
+    display: flex;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .keys-grid {
+    flex: 1;
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 8px;
+  }
+  .key {
+    aspect-ratio: 1;
+    border-radius: 10px;
+    background: var(--key-off);
+    color: var(--key-off-text);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    font-weight: 600;
+    transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease, transform 80ms ease;
+    user-select: none;
+  }
+  .key.pressed {
+    background: var(--key-on);
+    color: var(--key-on-text);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--key-on) 45%, transparent);
+    transform: scale(0.94);
+  }
+  .key.flash-ok {
+    box-shadow: 0 0 0 3px var(--ok);
+  }
+  .key.flash-err {
+    box-shadow: 0 0 0 3px var(--err);
+  }
+  .bar {
+    width: 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .bar-segment {
+    flex: 1;
+    border-radius: 6px;
+    background: var(--bar-off);
+  }
+  .deck-caption {
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.78rem;
+    margin-top: 0.6rem;
+  }
+
   footer {
     text-align: center;
     color: var(--muted);
@@ -94,23 +159,38 @@
       <span class="label">Serial number</span>
       <span class="value" id="serial">—</span>
     </div>
-  </div>
-
-  <div class="card">
-    <div class="row">
-      <span class="label">Ultimo tasto premuto</span>
-      <span class="value" id="last-key">—</span>
-    </div>
     <div class="row">
       <span class="label">Ultima azione</span>
       <span class="value" id="last-action">—</span>
     </div>
   </div>
 
-  <footer>Aggiornato automaticamente ogni 2 secondi</footer>
+  <div class="card">
+    <div class="deck">
+      <div class="keys-grid" id="keys-grid"></div>
+      <div class="bar">
+        <div class="bar-segment"></div>
+        <div class="bar-segment"></div>
+        <div class="bar-segment"></div>
+      </div>
+    </div>
+    <div class="deck-caption">barra verticale — solo display, non interattiva</div>
+  </div>
+
+  <footer id="ws-status">connessione in corso…</footer>
 </main>
 
 <script>
+const KEYS_GRID = document.getElementById("keys-grid");
+const keyEls = {};
+for (let k = 1; k <= 15; k++) {
+  const el = document.createElement("div");
+  el.className = "key";
+  el.textContent = k;
+  KEYS_GRID.appendChild(el);
+  keyEls[k] = el;
+}
+
 function timeAgo(unixSeconds) {
   if (!unixSeconds) return "";
   const diff = Math.max(0, Math.floor(Date.now() / 1000) - unixSeconds);
@@ -120,25 +200,15 @@ function timeAgo(unixSeconds) {
   return Math.floor(diff / 3600) + "h fa";
 }
 
-async function refresh() {
+async function refreshStatus() {
   try {
     const res = await fetch("/api/status");
     const status = await res.json();
 
-    const connectedEl = document.getElementById("connected");
-    connectedEl.innerHTML = status.connected
+    document.getElementById("connected").innerHTML = status.connected
       ? '<span class="badge ok">connesso</span>'
       : '<span class="badge err">disconnesso</span>';
-
     document.getElementById("serial").textContent = status.serial || "—";
-
-    const lastKeyEl = document.getElementById("last-key");
-    if (status.last_key_press) {
-      lastKeyEl.textContent = "Tasto " + status.last_key_press.physical_key +
-        " (" + timeAgo(status.last_key_press.at_unix) + ")";
-    } else {
-      lastKeyEl.textContent = "—";
-    }
 
     const lastActionEl = document.getElementById("last-action");
     if (status.last_action_result) {
@@ -156,8 +226,50 @@ async function refresh() {
   }
 }
 
-refresh();
-setInterval(refresh, 2000);
+refreshStatus();
+setInterval(refreshStatus, 3000);
+
+function connectWs() {
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  const ws = new WebSocket(proto + "//" + location.host + "/ws");
+  const wsStatusEl = document.getElementById("ws-status");
+
+  ws.onopen = () => { wsStatusEl.textContent = "monitor in tempo reale attivo"; };
+  ws.onclose = () => {
+    wsStatusEl.textContent = "connessione persa, nuovo tentativo tra 2s…";
+    setTimeout(connectWs, 2000);
+  };
+  ws.onerror = () => ws.close();
+
+  const MIN_VISIBLE_MS = 180;
+  const pressedAt = {};
+
+  ws.onmessage = (msg) => {
+    const event = JSON.parse(msg.data);
+    const el = keyEls[event.physical_key];
+    if (!el) return;
+
+    if (event.type === "key") {
+      if (event.pressed) {
+        pressedAt[event.physical_key] = Date.now();
+        el.classList.add("pressed");
+      } else {
+        // Garantisce una durata minima visibile anche per pressioni fisiche
+        // rapidissime (altrimenti il flash dura troppo poco per essere notato).
+        const elapsed = Date.now() - (pressedAt[event.physical_key] || 0);
+        const wait = Math.max(0, MIN_VISIBLE_MS - elapsed);
+        setTimeout(() => el.classList.remove("pressed"), wait);
+      }
+    } else if (event.type === "action_result") {
+      const cls = event.success ? "flash-ok" : "flash-err";
+      el.classList.add(cls);
+      setTimeout(() => el.classList.remove(cls), 500);
+      refreshStatus();
+    }
+  };
+}
+
+connectWs();
 </script>
 </body>
 </html>

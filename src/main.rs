@@ -11,8 +11,8 @@ use mirajazz::{
 };
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
-use tokio::sync::{mpsc, RwLock};
-use web::{ActionResultInfo, KeyPressInfo, SharedStatus};
+use tokio::sync::{broadcast, mpsc, RwLock};
+use web::{ActionResultInfo, AppState, KeyEvent, KeyPressInfo};
 
 const QUERY: DeviceQuery = DeviceQuery::new(65440, 1, 0x1500, 0x3003);
 const KEY_COUNT: usize = 18;
@@ -59,18 +59,23 @@ async fn main() -> anyhow::Result<()> {
     let device = Device::connect(&dev, PROTOCOL_VERSION, KEY_COUNT, ENCODER_COUNT).await?;
     println!("Connesso al deck, serial {}", device.serial_number());
 
-    let status: SharedStatus = Arc::new(RwLock::new(web::Status {
+    let status = Arc::new(RwLock::new(web::Status {
         connected: true,
         serial: device.serial_number().to_string(),
         ..Default::default()
     }));
+    let (events_tx, _) = broadcast::channel::<KeyEvent>(64);
+    let app_state = AppState {
+        status: status.clone(),
+        events: events_tx.clone(),
+    };
 
     let web_addr = config
         .web
         .bind
         .parse()
         .map_err(|e| anyhow::anyhow!("indirizzo web '{}' non valido: {e}", config.web.bind))?;
-    tokio::spawn(web::serve(status.clone(), web_addr));
+    tokio::spawn(web::serve(app_state, web_addr));
 
     // set_brightness attiva l'handshake di inizializzazione del dispositivo:
     // senza, il deck non riporta le pressioni dei tasti (vedi ANALYSIS.md).
@@ -109,15 +114,21 @@ async fn main() -> anyhow::Result<()> {
     println!("In ascolto. Premi un tasto sul deck per eseguire l'azione configurata.");
 
     while let Some((read_index, state)) = rx.recv().await {
-        // Reagisce solo al rilascio, per evitare di eseguire l'azione due volte
-        // (una per la pressione, una per il rilascio).
-        if state != 0 {
-            continue;
-        }
-
         let Some(physical_key) = keymap::physical_key_for_read_index(read_index) else {
             continue; // barra verticale o indice non riconosciuto
         };
+
+        let pressed = state != 0;
+        let _ = events_tx.send(KeyEvent::Key {
+            physical_key,
+            pressed,
+        });
+
+        // Esegue l'azione solo al rilascio, per evitare di eseguirla due volte
+        // (una per la pressione, una per il rilascio).
+        if pressed {
+            continue;
+        }
 
         status.write().await.last_key_press = Some(KeyPressInfo {
             physical_key,
@@ -141,6 +152,10 @@ async fn main() -> anyhow::Result<()> {
             success,
             message,
             at_unix: web::now_unix(),
+        });
+        let _ = events_tx.send(KeyEvent::ActionResult {
+            physical_key,
+            success,
         });
 
         if let Err(e) = result {
