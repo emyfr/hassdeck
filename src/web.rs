@@ -16,7 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{broadcast, RwLock};
 
 use crate::config::{self, Action, Config};
-use crate::icons;
+use crate::icons::{self, IconCache};
 use mirajazz::device::Device;
 
 #[derive(Debug, Clone, Serialize)]
@@ -61,6 +61,7 @@ pub struct AppState {
     pub config: SharedConfig,
     pub config_path: Arc<PathBuf>,
     pub icons_dir: Arc<PathBuf>,
+    pub icon_cache: IconCache,
 }
 
 pub fn now_unix() -> u64 {
@@ -175,9 +176,11 @@ async fn upload_icon_handler(
     std::fs::write(&file_path, &bytes).map_err(internal_err)?;
     let icon_rel_path = format!("icons/{filename}");
 
-    icons::write_icon_to_device(&state.device, key, image)
+    let key_icons = icons::prepare_key_icons(key, image);
+    icons::write_icon_to_device(&state.device, key, key_icons.normal.clone())
         .await
         .map_err(internal_err)?;
+    state.icon_cache.write().await.insert(key, key_icons);
 
     let mut config = state.config.write().await;
     config::set_key_icon(&mut config, key, icon_rel_path);

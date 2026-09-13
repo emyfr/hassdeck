@@ -57,6 +57,8 @@ async fn main() -> anyhow::Result<()> {
     let (events_tx, _) = broadcast::channel::<KeyEvent>(64);
     let config = Arc::new(RwLock::new(config));
 
+    let icon_cache = icons::new_icon_cache();
+
     let app_state = AppState {
         status: status.clone(),
         events: events_tx.clone(),
@@ -64,6 +66,7 @@ async fn main() -> anyhow::Result<()> {
         config: config.clone(),
         config_path: Arc::new(config_path),
         icons_dir: Arc::new(PathBuf::from(ICONS_DIR)),
+        icon_cache: icon_cache.clone(),
     };
 
     let web_addr = {
@@ -87,7 +90,9 @@ async fn main() -> anyhow::Result<()> {
             if let Some(icon_path) = &key_config.icon {
                 let image = open_image(icon_path)
                     .map_err(|e| anyhow::anyhow!("impossibile caricare icona '{icon_path}': {e}"))?;
-                icons::write_icon_to_device(&device, key_config.key, image).await?;
+                let key_icons = icons::prepare_key_icons(key_config.key, image);
+                icons::write_icon_to_device(&device, key_config.key, key_icons.normal.clone()).await?;
+                icon_cache.write().await.insert(key_config.key, key_icons);
                 println!("Icona caricata per tasto {}", key_config.key);
             }
         }
@@ -121,10 +126,19 @@ async fn main() -> anyhow::Result<()> {
             pressed,
         });
 
-        // Esegue l'azione solo al rilascio, per evitare di eseguirla due volte
-        // (una per la pressione, una per il rilascio).
         if pressed {
+            // Mostra subito la variante scurita, se il tasto ha un'icona.
+            if let Some(icons) = icon_cache.read().await.get(&physical_key) {
+                let _ = icons::write_icon_to_device(&device, physical_key, icons.pressed.clone()).await;
+            }
+            // Esegue l'azione solo al rilascio, per evitare di eseguirla due
+            // volte (una per la pressione, una per il rilascio).
             continue;
+        }
+
+        // Ripristina l'icona a riposo, se il tasto ne ha una.
+        if let Some(icons) = icon_cache.read().await.get(&physical_key) {
+            let _ = icons::write_icon_to_device(&device, physical_key, icons.normal.clone()).await;
         }
 
         status.write().await.last_key_press = Some(KeyPressInfo {
