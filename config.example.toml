@@ -1,0 +1,17 @@
+# Copia questo file in config.toml e adattalo.
+
+brightness = 80
+
+[home_assistant]
+url = "http://homeassistant.local:8123"
+token = "IL_TUO_LONG_LIVED_ACCESS_TOKEN"
+
+[[keys]]
+key = 1
+icon = "icons/light_on.png"
+action = { type = "home_assistant", service = "light.toggle", entity_id = "light.soggiorno" }
+
+[[keys]]
+key = 2
+icon = "icons/scene.png"
+action = { type = "home_assistant", service = "scene.turn_on", entity_id = "scene.movie_night" }
