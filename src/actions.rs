@@ -1,4 +1,11 @@
 use crate::config::{Action, HomeAssistantConfig};
+use serde::Serialize;
+
+#[derive(Debug, Serialize, Clone)]
+pub struct EntitySummary {
+    pub entity_id: String,
+    pub friendly_name: Option<String>,
+}
 
 fn build_home_assistant_client(ha: &HomeAssistantConfig) -> anyhow::Result<reqwest::Client> {
     reqwest::Client::builder()
@@ -36,6 +43,56 @@ pub async fn test_home_assistant_connection(ha: &HomeAssistantConfig) -> anyhow:
     }
 
     Ok(body)
+}
+
+/// Recupera l'elenco delle entita' esposte da Home Assistant (`GET
+/// /api/states`), per popolare un menu a tendina nell'editor invece di
+/// dover digitare a mano gli `entity_id`.
+pub async fn list_entities(ha: &HomeAssistantConfig) -> anyhow::Result<Vec<EntitySummary>> {
+    if ha.url.trim().is_empty() || ha.token.trim().is_empty() {
+        anyhow::bail!("url o token Home Assistant non impostati (vedi /impostazioni)");
+    }
+
+    let client = build_home_assistant_client(ha)?;
+    let url = format!("{}/api/states", ha.url.trim_end_matches('/'));
+
+    let response = client
+        .get(&url)
+        .bearer_auth(&ha.token)
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("impossibile contattare {url}: {e}"))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("Home Assistant ha risposto {status}: {body}");
+    }
+
+    let states: Vec<serde_json::Value> = response
+        .json()
+        .await
+        .map_err(|e| anyhow::anyhow!("risposta di Home Assistant non valida: {e}"))?;
+
+    let mut entities: Vec<EntitySummary> = states
+        .into_iter()
+        .filter_map(|state| {
+            let entity_id = state.get("entity_id")?.as_str()?.to_string();
+            let friendly_name = state
+                .get("attributes")
+                .and_then(|a| a.get("friendly_name"))
+                .and_then(|n| n.as_str())
+                .map(str::to_string);
+            Some(EntitySummary {
+                entity_id,
+                friendly_name,
+            })
+        })
+        .collect();
+
+    entities.sort_by(|a, b| a.entity_id.cmp(&b.entity_id));
+
+    Ok(entities)
 }
 
 pub async fn execute(

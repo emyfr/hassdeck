@@ -369,6 +369,19 @@ struct TestConnectionResult {
     message: String,
 }
 
+async fn list_home_assistant_entities(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<actions::EntitySummary>>, (StatusCode, String)> {
+    let ha = state.config.read().await.home_assistant.clone();
+    let entities = actions::list_entities(&ha).await.map_err(|e| {
+        (
+            StatusCode::BAD_GATEWAY,
+            format!("impossibile recuperare le entita' da Home Assistant: {e}"),
+        )
+    })?;
+    Ok(Json(entities))
+}
+
 async fn test_home_assistant_settings(
     Json(body): Json<HomeAssistantConfig>,
 ) -> Json<TestConnectionResult> {
@@ -415,6 +428,10 @@ fn router(state: AppState) -> Router {
         .route(
             "/api/settings/home_assistant/test",
             axum::routing::post(test_home_assistant_settings),
+        )
+        .route(
+            "/api/home_assistant/entities",
+            get(list_home_assistant_entities),
         )
         .nest_service("/icons", tower_http::services::ServeDir::new(icons_dir))
         .with_state(state)

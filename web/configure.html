@@ -123,6 +123,30 @@
     min-width: 260px;
   }
   .action-fields input, .action-fields select { flex: 1; min-width: 0; }
+  .entity-combo { position: relative; flex: 1; min-width: 0; }
+  .entity-combo-input { width: 100%; }
+  .entity-combo-dropdown {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    max-height: 240px;
+    overflow-y: auto;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
+    z-index: 20;
+  }
+  .entity-combo-dropdown.open { display: block; }
+  .entity-combo-option {
+    padding: 0.45rem 0.6rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  .entity-combo-option:hover, .entity-combo-option.active { background: var(--input-bg); }
+  .entity-combo-empty { padding: 0.45rem 0.6rem; font-size: 0.85rem; color: var(--muted); }
   input[type="text"], select {
     background: var(--input-bg);
     border: 1px solid var(--border);
@@ -166,12 +190,104 @@
     </div>
   </nav>
   <p class="hint">Carica un'icona per tasto (viene scritta subito sul deck) e imposta l'azione da eseguire al rilascio: una chiamata a un servizio Home Assistant, oppure una richiesta HTTP a un URL qualsiasi. Le modifiche si salvano subito in config.toml.</p>
+  <p class="hint status-line err" id="entities-hint" style="display:none;"></p>
 
   <div id="keys-container"></div>
 </main>
 
 <script>
 const container = document.getElementById("keys-container");
+
+let ENTITIES = [];
+let entitiesError = null;
+
+async function loadEntities() {
+  try {
+    const res = await fetch("/api/home_assistant/entities");
+    if (!res.ok) throw new Error(await res.text());
+    ENTITIES = await res.json();
+    entitiesError = null;
+  } catch (err) {
+    entitiesError = err.message;
+    ENTITIES = [];
+  }
+}
+
+function escapeHtml(text) {
+  return text.replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+function entityLabel(entityId) {
+  if (!entityId) return "";
+  const e = ENTITIES.find((x) => x.entity_id === entityId);
+  if (!e) return entityId;
+  return e.friendly_name ? `${e.friendly_name} (${e.entity_id})` : e.entity_id;
+}
+
+const ENTITY_COMBO_MAX_RESULTS = 100;
+
+function entityFieldMarkup(currentValue) {
+  if (entitiesError) {
+    return `<input type="text" class="entity-input" placeholder="entity_id (es. light.soggiorno)" value="${escapeHtml(currentValue)}">`;
+  }
+  return `
+    <div class="entity-combo">
+      <input type="text" class="entity-combo-input" autocomplete="off" placeholder="cerca entità…" value="${escapeHtml(entityLabel(currentValue))}">
+      <input type="hidden" class="entity-value" value="${escapeHtml(currentValue)}">
+      <div class="entity-combo-dropdown"></div>
+    </div>
+  `;
+}
+
+function setupEntityCombo(combo) {
+  const input = combo.querySelector(".entity-combo-input");
+  const hidden = combo.querySelector(".entity-value");
+  const dropdown = combo.querySelector(".entity-combo-dropdown");
+
+  function renderOptions(filter) {
+    const q = filter.trim().toLowerCase();
+    const matches = ENTITIES.filter((e) => {
+      const haystack = (e.friendly_name || "") + " " + e.entity_id;
+      return haystack.toLowerCase().includes(q);
+    }).slice(0, ENTITY_COMBO_MAX_RESULTS);
+
+    if (matches.length === 0) {
+      dropdown.innerHTML = `<div class="entity-combo-empty">nessuna entità trovata</div>`;
+      return;
+    }
+
+    dropdown.innerHTML = matches
+      .map((e) => {
+        const label = e.friendly_name ? `${e.friendly_name} (${e.entity_id})` : e.entity_id;
+        return `<div class="entity-combo-option" data-id="${escapeHtml(e.entity_id)}">${escapeHtml(label)}</div>`;
+      })
+      .join("");
+
+    dropdown.querySelectorAll(".entity-combo-option").forEach((opt) => {
+      opt.addEventListener("mousedown", (ev) => {
+        ev.preventDefault(); // evita che il blur si attivi prima del click sull'opzione
+        hidden.value = opt.dataset.id;
+        input.value = entityLabel(opt.dataset.id);
+        dropdown.classList.remove("open");
+      });
+    });
+  }
+
+  input.addEventListener("focus", () => {
+    input.select();
+    renderOptions("");
+    dropdown.classList.add("open");
+  });
+  input.addEventListener("input", () => renderOptions(input.value));
+  input.addEventListener("blur", () => {
+    setTimeout(() => {
+      input.value = entityLabel(hidden.value);
+      dropdown.classList.remove("open");
+    }, 150);
+  });
+}
 
 function iconPreviewMarkup(icon) {
   if (icon) {
@@ -203,7 +319,7 @@ function keyCardMarkup(k) {
           </select>
           <div class="action-fields ha-fields" style="display:${isUrl ? "none" : "flex"}">
             <input type="text" class="service-input" placeholder="dominio.servizio (es. light.toggle)" value="${action.service || ''}">
-            <input type="text" class="entity-input" placeholder="entity_id (es. light.soggiorno)" value="${action.entity_id || ''}">
+            ${entityFieldMarkup(action.entity_id || '')}
           </div>
           <div class="action-fields url-fields" style="display:${isUrl ? "flex" : "none"}">
             <input type="text" class="url-input" placeholder="https://esempio.local/webhook" value="${action.url || ''}">
@@ -244,6 +360,13 @@ function attachIconHandler(card, key, statusEl) {
 }
 
 async function loadKeys() {
+  await loadEntities();
+  const entitiesHintEl = document.getElementById("entities-hint");
+  if (entitiesError) {
+    entitiesHintEl.textContent = "Impossibile caricare le entità da Home Assistant (" + entitiesError + ") — inserisci l'entity_id a mano, o controlla /impostazioni.";
+    entitiesHintEl.style.display = "block";
+  }
+
   const res = await fetch("/api/keys");
   const keys = await res.json();
   container.innerHTML = keys.map(keyCardMarkup).join("");
@@ -253,6 +376,9 @@ async function loadKeys() {
     const statusEl = card.querySelector(".status-line");
 
     attachIconHandler(card, key, statusEl);
+
+    const entityCombo = card.querySelector(".entity-combo");
+    if (entityCombo) setupEntityCombo(entityCombo);
 
     card.querySelector(".action-type").addEventListener("change", (e) => {
       const isUrl = e.target.value === "url";
@@ -266,7 +392,10 @@ async function loadKeys() {
 
       if (type === "home_assistant") {
         const service = card.querySelector(".service-input").value.trim();
-        const entityId = card.querySelector(".entity-input").value.trim();
+        const entityValueEl = card.querySelector(".entity-value");
+        const entityId = entityValueEl
+          ? entityValueEl.value.trim()
+          : card.querySelector(".entity-input").value.trim();
         if (!service || !entityId) {
           statusEl.textContent = "compila service ed entity_id";
           statusEl.className = "status-line err";
