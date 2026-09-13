@@ -1,0 +1,17 @@
+[Unit]
+Description=Streamdeck HA Bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/<utente>/streamdeck-ha-bridge
+ExecStart=/home/<utente>/streamdeck-ha-bridge/target/release/streamdeck-ha-bridge /home/<utente>/streamdeck-ha-bridge/config.toml
+Restart=on-failure
+RestartSec=3
+User=root
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
