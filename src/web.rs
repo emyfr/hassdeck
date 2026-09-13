@@ -382,6 +382,19 @@ async fn list_home_assistant_entities(
     Ok(Json(entities))
 }
 
+async fn list_home_assistant_services(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<actions::DomainServices>>, (StatusCode, String)> {
+    let ha = state.config.read().await.home_assistant.clone();
+    let services = actions::list_services(&ha).await.map_err(|e| {
+        (
+            StatusCode::BAD_GATEWAY,
+            format!("impossibile recuperare i servizi da Home Assistant: {e}"),
+        )
+    })?;
+    Ok(Json(services))
+}
+
 async fn test_home_assistant_settings(
     Json(body): Json<HomeAssistantConfig>,
 ) -> Json<TestConnectionResult> {
@@ -432,6 +445,10 @@ fn router(state: AppState) -> Router {
         .route(
             "/api/home_assistant/entities",
             get(list_home_assistant_entities),
+        )
+        .route(
+            "/api/home_assistant/services",
+            get(list_home_assistant_services),
         )
         .nest_service("/icons", tower_http::services::ServeDir::new(icons_dir))
         .with_state(state)

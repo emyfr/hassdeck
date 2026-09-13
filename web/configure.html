@@ -198,6 +198,15 @@
 <script>
 const container = document.getElementById("keys-container");
 
+// Domini con senso come azione da tasto (esclude sensor/binary_sensor/update/
+// device_tracker e altri domini di sola lettura). L'utente può comunque
+// digitare a mano qualsiasi entity_id nel campo di ricerca, questo filtro
+// riguarda solo cosa compare come suggerimento nella tendina.
+const ACTIONABLE_DOMAINS = new Set([
+  "light", "switch", "climate", "cover", "media_player",
+  "lock", "fan", "script", "automation", "button",
+]);
+
 let ENTITIES = [];
 let entitiesError = null;
 
@@ -205,7 +214,8 @@ async function loadEntities() {
   try {
     const res = await fetch("/api/home_assistant/entities");
     if (!res.ok) throw new Error(await res.text());
-    ENTITIES = await res.json();
+    const all = await res.json();
+    ENTITIES = all.filter((e) => ACTIONABLE_DOMAINS.has(entityDomain(e.entity_id)));
     entitiesError = null;
   } catch (err) {
     entitiesError = err.message;
@@ -226,6 +236,30 @@ function entityLabel(entityId) {
   return e.friendly_name ? `${e.friendly_name} (${e.entity_id})` : e.entity_id;
 }
 
+let SERVICES = [];
+let servicesError = null;
+
+async function loadServices() {
+  try {
+    const res = await fetch("/api/home_assistant/services");
+    if (!res.ok) throw new Error(await res.text());
+    SERVICES = await res.json();
+    servicesError = null;
+  } catch (err) {
+    servicesError = err.message;
+    SERVICES = [];
+  }
+}
+
+function servicesForDomain(domain) {
+  const entry = SERVICES.find((d) => d.domain === domain);
+  return entry ? entry.services : [];
+}
+
+function entityDomain(entityId) {
+  return entityId && entityId.includes(".") ? entityId.split(".")[0] : null;
+}
+
 const ENTITY_COMBO_MAX_RESULTS = 100;
 
 function entityFieldMarkup(currentValue) {
@@ -234,14 +268,14 @@ function entityFieldMarkup(currentValue) {
   }
   return `
     <div class="entity-combo">
-      <input type="text" class="entity-combo-input" autocomplete="off" placeholder="cerca entità…" value="${escapeHtml(entityLabel(currentValue))}">
+      <input type="text" class="entity-combo-input" autocomplete="off" placeholder="cerca entità o digita un entity_id…" value="${escapeHtml(entityLabel(currentValue))}">
       <input type="hidden" class="entity-value" value="${escapeHtml(currentValue)}">
       <div class="entity-combo-dropdown"></div>
     </div>
   `;
 }
 
-function setupEntityCombo(combo) {
+function setupEntityCombo(combo, onChange) {
   const input = combo.querySelector(".entity-combo-input");
   const hidden = combo.querySelector(".entity-value");
   const dropdown = combo.querySelector(".entity-combo-dropdown");
@@ -271,6 +305,7 @@ function setupEntityCombo(combo) {
         hidden.value = opt.dataset.id;
         input.value = entityLabel(opt.dataset.id);
         dropdown.classList.remove("open");
+        if (onChange) onChange();
       });
     });
   }
@@ -283,10 +318,66 @@ function setupEntityCombo(combo) {
   input.addEventListener("input", () => renderOptions(input.value));
   input.addEventListener("blur", () => {
     setTimeout(() => {
-      input.value = entityLabel(hidden.value);
+      const typed = input.value.trim();
+      if (typed !== entityLabel(hidden.value)) {
+        // Non corrisponde a una selezione dalla tendina: trattalo come
+        // entity_id inserito a mano (fallback per entità non elencate).
+        hidden.value = typed;
+        input.value = entityLabel(typed) || typed;
+      }
       dropdown.classList.remove("open");
+      if (onChange) onChange();
     }, 150);
   });
+}
+
+function initialServicePart(fullService, entityId) {
+  if (!fullService) return "";
+  const domain = entityDomain(entityId);
+  if (domain && fullService.startsWith(domain + ".")) {
+    return fullService.slice(domain.length + 1);
+  }
+  return fullService;
+}
+
+function serviceFieldMarkup(currentService, currentEntityId) {
+  if (entitiesError || servicesError) {
+    return `<input type="text" class="service-input" placeholder="dominio.servizio (es. light.toggle)" value="${escapeHtml(currentService)}">`;
+  }
+  const initial = initialServicePart(currentService, currentEntityId);
+  return `<select class="service-select" data-initial-service="${escapeHtml(initial)}" disabled></select>`;
+}
+
+function populateServiceSelect(select, domain, currentService) {
+  if (!domain) {
+    select.innerHTML = `<option value="">-- seleziona un'entità --</option>`;
+    select.value = "";
+    select.disabled = true;
+    select.dataset.domain = "";
+    return;
+  }
+
+  const services = servicesForDomain(domain);
+  const known = services.some((s) => s.service === currentService);
+
+  let options = services
+    .map((s) => {
+      const label = s.name ? `${s.name} (${s.service})` : s.service;
+      return `<option value="${escapeHtml(s.service)}">${escapeHtml(label)}</option>`;
+    })
+    .join("");
+
+  if (currentService && !known) {
+    options += `<option value="${escapeHtml(currentService)}">${escapeHtml(currentService)} (non nell'elenco)</option>`;
+  }
+  if (!currentService) {
+    options = `<option value="">-- seleziona un servizio --</option>` + options;
+  }
+
+  select.innerHTML = options || `<option value="">nessun servizio disponibile</option>`;
+  select.value = currentService || "";
+  select.disabled = false;
+  select.dataset.domain = domain;
 }
 
 function iconPreviewMarkup(icon) {
@@ -318,8 +409,8 @@ function keyCardMarkup(k) {
             <option value="url" ${isUrl ? "selected" : ""}>Chiamata URL</option>
           </select>
           <div class="action-fields ha-fields" style="display:${isUrl ? "none" : "flex"}">
-            <input type="text" class="service-input" placeholder="dominio.servizio (es. light.toggle)" value="${action.service || ''}">
             ${entityFieldMarkup(action.entity_id || '')}
+            ${serviceFieldMarkup(action.service || '', action.entity_id || '')}
           </div>
           <div class="action-fields url-fields" style="display:${isUrl ? "flex" : "none"}">
             <input type="text" class="url-input" placeholder="https://esempio.local/webhook" value="${action.url || ''}">
@@ -360,10 +451,13 @@ function attachIconHandler(card, key, statusEl) {
 }
 
 async function loadKeys() {
-  await loadEntities();
+  await Promise.all([loadEntities(), loadServices()]);
   const entitiesHintEl = document.getElementById("entities-hint");
-  if (entitiesError) {
-    entitiesHintEl.textContent = "Impossibile caricare le entità da Home Assistant (" + entitiesError + ") — inserisci l'entity_id a mano, o controlla /impostazioni.";
+  const hintMessages = [];
+  if (entitiesError) hintMessages.push("entità (" + entitiesError + ")");
+  if (servicesError) hintMessages.push("servizi (" + servicesError + ")");
+  if (hintMessages.length) {
+    entitiesHintEl.textContent = "Impossibile caricare da Home Assistant: " + hintMessages.join(", ") + " — inserisci service/entity_id a mano, o controlla /impostazioni.";
     entitiesHintEl.style.display = "block";
   }
 
@@ -377,8 +471,27 @@ async function loadKeys() {
 
     attachIconHandler(card, key, statusEl);
 
+    const serviceSelect = card.querySelector(".service-select");
+
+    function currentEntityId() {
+      const hidden = card.querySelector(".entity-value");
+      if (hidden) return hidden.value.trim();
+      const fallback = card.querySelector(".entity-input");
+      return fallback ? fallback.value.trim() : "";
+    }
+
+    function refreshServiceSelect() {
+      if (!serviceSelect) return; // fallback a testo libero: nulla da collegare
+      const domain = entityDomain(currentEntityId());
+      const sameDomain = serviceSelect.dataset.domain === domain;
+      const desired = sameDomain ? serviceSelect.value : (serviceSelect.dataset.initialService || "");
+      populateServiceSelect(serviceSelect, domain, desired);
+      if (!sameDomain) serviceSelect.dataset.initialService = "";
+    }
+
     const entityCombo = card.querySelector(".entity-combo");
-    if (entityCombo) setupEntityCombo(entityCombo);
+    if (entityCombo) setupEntityCombo(entityCombo, refreshServiceSelect);
+    refreshServiceSelect();
 
     card.querySelector(".action-type").addEventListener("change", (e) => {
       const isUrl = e.target.value === "url";
@@ -391,11 +504,20 @@ async function loadKeys() {
       let body;
 
       if (type === "home_assistant") {
-        const service = card.querySelector(".service-input").value.trim();
         const entityValueEl = card.querySelector(".entity-value");
         const entityId = entityValueEl
           ? entityValueEl.value.trim()
           : card.querySelector(".entity-input").value.trim();
+
+        let service;
+        if (serviceSelect) {
+          const domain = entityDomain(entityId);
+          const svc = serviceSelect.value.trim();
+          service = domain && svc ? `${domain}.${svc}` : "";
+        } else {
+          service = card.querySelector(".service-input").value.trim();
+        }
+
         if (!service || !entityId) {
           statusEl.textContent = "compila service ed entity_id";
           statusEl.className = "status-line err";

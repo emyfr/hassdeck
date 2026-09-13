@@ -95,6 +95,70 @@ pub async fn list_entities(ha: &HomeAssistantConfig) -> anyhow::Result<Vec<Entit
     Ok(entities)
 }
 
+#[derive(Debug, Serialize, Clone)]
+pub struct ServiceSummary {
+    pub service: String,
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct DomainServices {
+    pub domain: String,
+    pub services: Vec<ServiceSummary>,
+}
+
+/// Recupera l'elenco dei servizi esposti da Home Assistant (`GET
+/// /api/services`), raggruppati per dominio, per popolare un menu a tendina
+/// filtrato in base al dominio dell'entità selezionata invece di dover
+/// scrivere a mano la stringa "dominio.servizio".
+pub async fn list_services(ha: &HomeAssistantConfig) -> anyhow::Result<Vec<DomainServices>> {
+    if ha.url.trim().is_empty() || ha.token.trim().is_empty() {
+        anyhow::bail!("url o token Home Assistant non impostati (vedi /impostazioni)");
+    }
+
+    let client = build_home_assistant_client(ha)?;
+    let url = format!("{}/api/services", ha.url.trim_end_matches('/'));
+
+    let response = client
+        .get(&url)
+        .bearer_auth(&ha.token)
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("impossibile contattare {url}: {e}"))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("Home Assistant ha risposto {status}: {body}");
+    }
+
+    let raw: Vec<serde_json::Value> = response
+        .json()
+        .await
+        .map_err(|e| anyhow::anyhow!("risposta di Home Assistant non valida: {e}"))?;
+
+    let mut domains: Vec<DomainServices> = raw
+        .into_iter()
+        .filter_map(|entry| {
+            let domain = entry.get("domain")?.as_str()?.to_string();
+            let services_obj = entry.get("services")?.as_object()?;
+            let mut services: Vec<ServiceSummary> = services_obj
+                .iter()
+                .map(|(service, meta)| ServiceSummary {
+                    service: service.clone(),
+                    name: meta.get("name").and_then(|n| n.as_str()).map(str::to_string),
+                })
+                .collect();
+            services.sort_by(|a, b| a.service.cmp(&b.service));
+            Some(DomainServices { domain, services })
+        })
+        .collect();
+
+    domains.sort_by(|a, b| a.domain.cmp(&b.domain));
+
+    Ok(domains)
+}
+
 pub async fn execute(
     client: &reqwest::Client,
     ha: &HomeAssistantConfig,
