@@ -12,7 +12,7 @@ use serde::Serialize;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{broadcast, RwLock};
 
 use crate::actions;
@@ -63,6 +63,82 @@ pub struct AppState {
     pub config_path: Arc<PathBuf>,
     pub icons_dir: Arc<PathBuf>,
     pub icon_cache: IconCache,
+    pub ha_client: reqwest::Client,
+}
+
+/// Durata (ms) del lampeggio "premuto" mostrato quando il tasto viene
+/// attivato da web, dato che non esiste una vera pressione da tenere.
+const WEB_PRESS_FLASH_MS: u64 = 180;
+
+/// Mostra la variante "premuta" dell'icona del tasto (se presente) per un
+/// breve istante, poi ripristina quella normale — usato quando il tasto
+/// viene attivato dall'interfaccia web anziche' da una pressione fisica.
+async fn flash_key_icon(state: &AppState, physical_key: u8) {
+    let icons = state.icon_cache.read().await.get(&physical_key).cloned();
+
+    let _ = state.events.send(KeyEvent::Key {
+        physical_key,
+        pressed: true,
+    });
+    if let Some(icons) = &icons {
+        let _ = icons::write_icon_to_device(&state.device, physical_key, icons.pressed.clone()).await;
+    }
+
+    tokio::time::sleep(Duration::from_millis(WEB_PRESS_FLASH_MS)).await;
+
+    let _ = state.events.send(KeyEvent::Key {
+        physical_key,
+        pressed: false,
+    });
+    if let Some(icons) = &icons {
+        let _ = icons::write_icon_to_device(&state.device, physical_key, icons.normal.clone()).await;
+    }
+}
+
+/// Esegue l'azione configurata per un tasto e registra l'esito, sia che
+/// l'attivazione provenga da una pressione fisica sia da un click web.
+pub async fn run_key_action(state: &AppState, physical_key: u8) {
+    state.status.write().await.last_key_press = Some(KeyPressInfo {
+        physical_key,
+        at_unix: now_unix(),
+    });
+
+    let (action, ha) = {
+        let config = state.config.read().await;
+        let action = config
+            .keys
+            .iter()
+            .find(|k| k.key == physical_key)
+            .and_then(|k| k.action.clone());
+        (action, config.home_assistant.clone())
+    };
+
+    let Some(action) = action else {
+        println!("Tasto {physical_key} premuto, nessuna azione configurata");
+        return;
+    };
+
+    println!("Tasto {physical_key} premuto: eseguo azione");
+    let result = actions::execute(&state.ha_client, &ha, &action).await;
+
+    let (success, message) = match &result {
+        Ok(()) => (true, "OK".to_string()),
+        Err(e) => (false, e.to_string()),
+    };
+    state.status.write().await.last_action_result = Some(ActionResultInfo {
+        physical_key,
+        success,
+        message,
+        at_unix: now_unix(),
+    });
+    let _ = state.events.send(KeyEvent::ActionResult {
+        physical_key,
+        success,
+    });
+
+    if let Err(e) = result {
+        eprintln!("Errore eseguendo l'azione per il tasto {physical_key}: {e}");
+    }
 }
 
 pub fn now_unix() -> u64 {
@@ -241,6 +317,18 @@ async fn set_action_handler(
     Ok(Json(key_config_view(&config, key)))
 }
 
+async fn press_key_handler(
+    State(state): State<AppState>,
+    AxumPath(key): AxumPath<u8>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    check_key_range(key)?;
+
+    flash_key_icon(&state, key).await;
+    run_key_action(&state, key).await;
+
+    Ok(StatusCode::OK)
+}
+
 async fn clear_action_handler(
     State(state): State<AppState>,
     AxumPath(key): AxumPath<u8>,
@@ -315,6 +403,10 @@ fn router(state: AppState) -> Router {
         .route(
             "/api/keys/{key}/action",
             axum::routing::put(set_action_handler).delete(clear_action_handler),
+        )
+        .route(
+            "/api/keys/{key}/press",
+            axum::routing::post(press_key_handler),
         )
         .route(
             "/api/settings/home_assistant",

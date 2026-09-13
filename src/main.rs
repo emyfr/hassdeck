@@ -13,7 +13,7 @@ use mirajazz::{
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use tokio::sync::{broadcast, mpsc, RwLock};
-use web::{ActionResultInfo, AppState, KeyEvent, KeyPressInfo};
+use web::{AppState, KeyEvent};
 
 const QUERY: DeviceQuery = DeviceQuery::new(65440, 1, 0x1500, 0x3003);
 const KEY_COUNT: usize = 18;
@@ -67,6 +67,7 @@ async fn main() -> anyhow::Result<()> {
         config_path: Arc::new(config_path),
         icons_dir: Arc::new(PathBuf::from(ICONS_DIR)),
         icon_cache: icon_cache.clone(),
+        ha_client: reqwest::Client::new(),
     };
 
     let web_addr = {
@@ -77,7 +78,7 @@ async fn main() -> anyhow::Result<()> {
             .parse()
             .map_err(|e| anyhow::anyhow!("indirizzo web '{}' non valido: {e}", config.web.bind))?
     };
-    tokio::spawn(web::serve(app_state, web_addr));
+    tokio::spawn(web::serve(app_state.clone(), web_addr));
 
     // set_brightness attiva l'handshake di inizializzazione del dispositivo:
     // senza, il deck non riporta le pressioni dei tasti (vedi ANALYSIS.md).
@@ -111,8 +112,6 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    let ha_client = reqwest::Client::new();
-
     println!("In ascolto. Premi un tasto sul deck per eseguire l'azione configurata.");
 
     while let Some((read_index, state)) = rx.recv().await {
@@ -141,44 +140,9 @@ async fn main() -> anyhow::Result<()> {
             let _ = icons::write_icon_to_device(&device, physical_key, icons.normal.clone()).await;
         }
 
-        status.write().await.last_key_press = Some(KeyPressInfo {
-            physical_key,
-            at_unix: web::now_unix(),
-        });
-
-        let config = config.read().await;
-        let Some(action) = config
-            .keys
-            .iter()
-            .find(|k| k.key == physical_key)
-            .and_then(|k| k.action.as_ref())
-        else {
-            println!("Tasto {physical_key} premuto, nessuna azione configurata");
-            continue;
-        };
-
-        println!("Tasto {physical_key} premuto: eseguo azione");
-        let result = actions::execute(&ha_client, &config.home_assistant, action).await;
-        drop(config);
-
-        let (success, message) = match &result {
-            Ok(()) => (true, "OK".to_string()),
-            Err(e) => (false, e.to_string()),
-        };
-        status.write().await.last_action_result = Some(ActionResultInfo {
-            physical_key,
-            success,
-            message,
-            at_unix: web::now_unix(),
-        });
-        let _ = events_tx.send(KeyEvent::ActionResult {
-            physical_key,
-            success,
-        });
-
-        if let Err(e) = result {
-            eprintln!("Errore eseguendo l'azione per il tasto {physical_key}: {e}");
-        }
+        // Stessa funzione usata quando il tasto viene attivato da web, cosi'
+        // il comportamento (esecuzione azione, stato, evento) e' identico.
+        web::run_key_action(&app_state, physical_key).await;
     }
 
     reader_task.abort();

@@ -111,7 +111,10 @@
     font-weight: 600;
     transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease, transform 80ms ease;
     user-select: none;
+    cursor: pointer;
   }
+  .key:hover { box-shadow: 0 0 0 2px color-mix(in srgb, var(--muted) 40%, transparent); }
+  .key.pending { opacity: 0.7; pointer-events: none; }
   .key.has-icon .key-label { display: none; }
   .key .key-badge {
     display: none;
@@ -198,7 +201,7 @@
         <div class="bar-segment"></div>
       </div>
     </div>
-    <div class="deck-caption">barra verticale — solo display, non interattiva</div>
+    <div class="deck-caption">clicca un tasto per attivarlo da qui — barra verticale solo display, non interattiva</div>
   </div>
 
   <footer id="ws-status">connessione in corso…</footer>
@@ -211,8 +214,22 @@ for (let k = 1; k <= 15; k++) {
   const el = document.createElement("div");
   el.className = "key";
   el.innerHTML = `<span class="key-label">${k}</span><span class="key-badge">${k}</span>`;
+  el.addEventListener("click", () => pressKeyFromWeb(k));
   KEYS_GRID.appendChild(el);
   keyEls[k] = el;
+}
+
+async function pressKeyFromWeb(key) {
+  const el = keyEls[key];
+  if (el.classList.contains("pending")) return; // evita doppio invio da click ripetuti
+  el.classList.add("pending");
+  try {
+    await fetch(`/api/keys/${key}/press`, { method: "POST" });
+  } catch (e) {
+    // il server aggiornera' comunque lo stato al prossimo refresh
+  } finally {
+    el.classList.remove("pending");
+  }
 }
 
 async function refreshIcons() {
