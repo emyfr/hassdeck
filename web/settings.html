@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Impostazioni — Streamdeck HA Bridge</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f5f5f7;
+    --card-bg: #ffffff;
+    --text: #1c1c1e;
+    --muted: #6e6e73;
+    --border: #e0e0e2;
+    --ok: #1e8e3e;
+    --err: #c5221f;
+    --accent: #0a66ff;
+    --input-bg: #f0f0f2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181a;
+      --card-bg: #232427;
+      --text: #f0f0f2;
+      --muted: #9a9aa0;
+      --border: #3a3b3e;
+      --ok: #3ddc73;
+      --err: #ff6b64;
+      --accent: #4c8dff;
+      --input-bg: #2c2d31;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    justify-content: center;
+    padding: 2.5rem 1rem;
+  }
+  main {
+    width: 100%;
+    max-width: 560px;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  nav {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 0.5rem;
+  }
+  h1 { font-size: 1.4rem; margin: 0; }
+  nav .links { display: flex; gap: 1rem; }
+  nav a { color: var(--accent); text-decoration: none; font-size: 0.9rem; }
+  nav a:hover { text-decoration: underline; }
+
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.3rem 1.4rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.9rem;
+  }
+  label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+  input[type="text"], input[type="password"] {
+    background: var(--input-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.55rem 0.7rem;
+    color: var(--text);
+    font-size: 0.95rem;
+  }
+  .checkbox-row {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .checkbox-row input { width: auto; }
+  .actions-row {
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+  }
+  button {
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 0.55rem 1rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button.secondary {
+    background: transparent;
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+  .status-line {
+    font-size: 0.85rem;
+    color: var(--muted);
+    min-height: 1.2em;
+  }
+  .status-line.ok { color: var(--ok); }
+  .status-line.err { color: var(--err); }
+  .hint { color: var(--muted); font-size: 0.78rem; }
+</style>
+</head>
+<body>
+<main>
+  <nav>
+    <h1>Impostazioni</h1>
+    <div class="links">
+      <a href="/">Monitor</a>
+      <a href="/configura">Configura</a>
+    </div>
+  </nav>
+
+  <div class="card">
+    <p class="hint">Parametri di connessione al server Home Assistant, usati dalle azioni di tipo "Home Assistant" assegnate ai tasti.</p>
+
+    <label>
+      URL del server
+      <input type="text" id="url" placeholder="http://homeassistant.local:8123">
+    </label>
+
+    <label>
+      Long-lived access token
+      <input type="password" id="token" placeholder="Genera un token da Profilo utente → Sicurezza in Home Assistant">
+    </label>
+
+    <label class="checkbox-row">
+      <input type="checkbox" id="verify-tls" checked>
+      Verifica certificato TLS (disattiva solo per istanze locali con certificato self-signed)
+    </label>
+
+    <div class="actions-row">
+      <button id="save-btn">Salva</button>
+      <button class="secondary" id="test-btn">Verifica connessione</button>
+    </div>
+    <div class="status-line" id="status-line"></div>
+  </div>
+</main>
+
+<script>
+const urlEl = document.getElementById("url");
+const tokenEl = document.getElementById("token");
+const verifyTlsEl = document.getElementById("verify-tls");
+const statusEl = document.getElementById("status-line");
+
+function currentValues() {
+  return {
+    url: urlEl.value.trim(),
+    token: tokenEl.value,
+    verify_tls: verifyTlsEl.checked,
+  };
+}
+
+function setStatus(text, kind) {
+  statusEl.textContent = text;
+  statusEl.className = "status-line" + (kind ? " " + kind : "");
+}
+
+async function load() {
+  try {
+    const res = await fetch("/api/settings/home_assistant");
+    const settings = await res.json();
+    urlEl.value = settings.url || "";
+    tokenEl.value = settings.token || "";
+    verifyTlsEl.checked = settings.verify_tls !== false;
+  } catch (e) {
+    setStatus("impossibile caricare le impostazioni attuali", "err");
+  }
+}
+
+document.getElementById("save-btn").addEventListener("click", async () => {
+  setStatus("salvataggio…");
+  try {
+    const res = await fetch("/api/settings/home_assistant", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(currentValues()),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    setStatus("impostazioni salvate", "ok");
+  } catch (err) {
+    setStatus("errore: " + err.message, "err");
+  }
+});
+
+document.getElementById("test-btn").addEventListener("click", async () => {
+  setStatus("verifica in corso…");
+  try {
+    const res = await fetch("/api/settings/home_assistant/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(currentValues()),
+    });
+    const result = await res.json();
+    if (result.success) {
+      setStatus("connessione riuscita: " + result.message, "ok");
+    } else {
+      setStatus("connessione fallita: " + result.message, "err");
+    }
+  } catch (err) {
+    setStatus("errore: " + err.message, "err");
+  }
+});
+
+load();
+</script>
+</body>
+</html>

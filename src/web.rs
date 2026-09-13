@@ -15,7 +15,8 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{broadcast, RwLock};
 
-use crate::config::{self, Action, Config};
+use crate::actions;
+use crate::config::{self, Action, Config, HomeAssistantConfig};
 use crate::icons::{self, IconCache};
 use mirajazz::device::Device;
 
@@ -97,6 +98,10 @@ async fn index_handler() -> Html<&'static str> {
 
 async fn configure_handler() -> Html<&'static str> {
     Html(include_str!("../web/configure.html"))
+}
+
+async fn settings_handler() -> Html<&'static str> {
+    Html(include_str!("../web/settings.html"))
 }
 
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
@@ -249,11 +254,54 @@ async fn clear_action_handler(
     Ok(Json(key_config_view(&config, key)))
 }
 
+async fn get_home_assistant_settings(State(state): State<AppState>) -> Json<HomeAssistantConfig> {
+    Json(state.config.read().await.home_assistant.clone())
+}
+
+async fn set_home_assistant_settings(
+    State(state): State<AppState>,
+    Json(body): Json<HomeAssistantConfig>,
+) -> Result<Json<HomeAssistantConfig>, (StatusCode, String)> {
+    if !body.url.trim().is_empty()
+        && !(body.url.starts_with("http://") || body.url.starts_with("https://"))
+    {
+        return Err(bad_request("il campo 'url' deve iniziare con http:// o https://"));
+    }
+
+    let mut config = state.config.write().await;
+    config.home_assistant = body;
+    config::save(&config, &state.config_path).map_err(internal_err)?;
+
+    Ok(Json(config.home_assistant.clone()))
+}
+
+#[derive(Debug, Serialize)]
+struct TestConnectionResult {
+    success: bool,
+    message: String,
+}
+
+async fn test_home_assistant_settings(
+    Json(body): Json<HomeAssistantConfig>,
+) -> Json<TestConnectionResult> {
+    match actions::test_home_assistant_connection(&body).await {
+        Ok(message) => Json(TestConnectionResult {
+            success: true,
+            message,
+        }),
+        Err(e) => Json(TestConnectionResult {
+            success: false,
+            message: e.to_string(),
+        }),
+    }
+}
+
 fn router(state: AppState) -> Router {
     let icons_dir = (*state.icons_dir).clone();
     Router::new()
         .route("/", get(index_handler))
         .route("/configura", get(configure_handler))
+        .route("/impostazioni", get(settings_handler))
         .route("/api/status", get(status_handler))
         .route("/ws", get(ws_handler))
         .route(
@@ -267,6 +315,14 @@ fn router(state: AppState) -> Router {
         .route(
             "/api/keys/{key}/action",
             axum::routing::put(set_action_handler).delete(clear_action_handler),
+        )
+        .route(
+            "/api/settings/home_assistant",
+            get(get_home_assistant_settings).put(set_home_assistant_settings),
+        )
+        .route(
+            "/api/settings/home_assistant/test",
+            axum::routing::post(test_home_assistant_settings),
         )
         .nest_service("/icons", tower_http::services::ServeDir::new(icons_dir))
         .with_state(state)

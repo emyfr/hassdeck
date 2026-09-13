@@ -5,6 +5,7 @@ use std::path::Path;
 pub struct Config {
     #[serde(default = "default_brightness")]
     pub brightness: u8,
+    #[serde(default)]
     pub home_assistant: HomeAssistantConfig,
     #[serde(default)]
     pub keys: Vec<KeyConfig>,
@@ -36,8 +37,28 @@ fn default_web_bind() -> String {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct HomeAssistantConfig {
+    #[serde(default)]
     pub url: String,
+    #[serde(default)]
     pub token: String,
+    /// Verifica il certificato TLS quando `url` e' https. Disattivabile per
+    /// istanze locali con certificato self-signed.
+    #[serde(default = "default_verify_tls")]
+    pub verify_tls: bool,
+}
+
+impl Default for HomeAssistantConfig {
+    fn default() -> Self {
+        Self {
+            url: String::new(),
+            token: String::new(),
+            verify_tls: default_verify_tls(),
+        }
+    }
+}
+
+fn default_verify_tls() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
