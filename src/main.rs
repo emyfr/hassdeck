@@ -1,5 +1,6 @@
 mod actions;
 mod config;
+mod icons;
 mod keymap;
 mod web;
 
@@ -7,7 +8,7 @@ use image::open as open_image;
 use mirajazz::{
     device::{list_devices, Device, DeviceQuery},
     error::MirajazzError,
-    types::{DeviceInput, ImageFormat, ImageMirroring, ImageMode, ImageRotation},
+    types::DeviceInput,
 };
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
@@ -18,18 +19,7 @@ const QUERY: DeviceQuery = DeviceQuery::new(65440, 1, 0x1500, 0x3003);
 const KEY_COUNT: usize = 18;
 const ENCODER_COUNT: usize = 0;
 const PROTOCOL_VERSION: usize = 3;
-
-fn image_format_for_write_index(index: u8) -> ImageFormat {
-    // Indice 17 = ultimo slot della barra verticale, dimensione diversa nel
-    // modello ereditato da AKP153 — non ancora confermata con un'icona reale.
-    let size = if index == 17 { (82, 82) } else { (95, 95) };
-    ImageFormat {
-        mode: ImageMode::JPEG,
-        size,
-        rotation: ImageRotation::Rot90,
-        mirror: ImageMirroring::Both,
-    }
-}
+const ICONS_DIR: &str = "icons";
 
 static KEY_EVENTS: OnceLock<mpsc::UnboundedSender<(u8, u8)>> = OnceLock::new();
 
@@ -56,7 +46,7 @@ async fn main() -> anyhow::Result<()> {
         .next()
         .ok_or_else(|| anyhow::anyhow!("nessun deck Soomfon trovato (VID 0x1500, PID 0x3003)"))?;
 
-    let device = Device::connect(&dev, PROTOCOL_VERSION, KEY_COUNT, ENCODER_COUNT).await?;
+    let device = Arc::new(Device::connect(&dev, PROTOCOL_VERSION, KEY_COUNT, ENCODER_COUNT).await?);
     println!("Connesso al deck, serial {}", device.serial_number());
 
     let status = Arc::new(RwLock::new(web::Status {
@@ -65,37 +55,44 @@ async fn main() -> anyhow::Result<()> {
         ..Default::default()
     }));
     let (events_tx, _) = broadcast::channel::<KeyEvent>(64);
+    let config = Arc::new(RwLock::new(config));
+
     let app_state = AppState {
         status: status.clone(),
         events: events_tx.clone(),
+        device: device.clone(),
+        config: config.clone(),
+        config_path: Arc::new(config_path),
+        icons_dir: Arc::new(PathBuf::from(ICONS_DIR)),
     };
 
-    let web_addr = config
-        .web
-        .bind
-        .parse()
-        .map_err(|e| anyhow::anyhow!("indirizzo web '{}' non valido: {e}", config.web.bind))?;
+    let web_addr = {
+        let config = config.read().await;
+        config
+            .web
+            .bind
+            .parse()
+            .map_err(|e| anyhow::anyhow!("indirizzo web '{}' non valido: {e}", config.web.bind))?
+    };
     tokio::spawn(web::serve(app_state, web_addr));
 
     // set_brightness attiva l'handshake di inizializzazione del dispositivo:
     // senza, il deck non riporta le pressioni dei tasti (vedi ANALYSIS.md).
-    device.set_brightness(config.brightness).await?;
-    device.clear_all_button_images().await?;
+    {
+        let config = config.read().await;
+        device.set_brightness(config.brightness).await?;
+        device.clear_all_button_images().await?;
 
-    for key_config in &config.keys {
-        if let Some(icon_path) = &key_config.icon {
-            let write_index = keymap::write_index_for_physical_key(key_config.key);
-            let format = image_format_for_write_index(write_index);
-            let image = open_image(icon_path)
-                .map_err(|e| anyhow::anyhow!("impossibile caricare icona '{icon_path}': {e}"))?;
-            device.set_button_image(write_index, format, image).await?;
-            println!(
-                "Icona caricata per tasto {} (indice {write_index})",
-                key_config.key
-            );
+        for key_config in &config.keys {
+            if let Some(icon_path) = &key_config.icon {
+                let image = open_image(icon_path)
+                    .map_err(|e| anyhow::anyhow!("impossibile caricare icona '{icon_path}': {e}"))?;
+                icons::write_icon_to_device(&device, key_config.key, image).await?;
+                println!("Icona caricata per tasto {}", key_config.key);
+            }
         }
+        device.flush().await?;
     }
-    device.flush().await?;
 
     let (tx, mut rx) = mpsc::unbounded_channel();
     KEY_EVENTS.set(tx).ok();
@@ -135,13 +132,20 @@ async fn main() -> anyhow::Result<()> {
             at_unix: web::now_unix(),
         });
 
-        let Some(key_config) = config.keys.iter().find(|k| k.key == physical_key) else {
+        let config = config.read().await;
+        let Some(action) = config
+            .keys
+            .iter()
+            .find(|k| k.key == physical_key)
+            .and_then(|k| k.action.as_ref())
+        else {
             println!("Tasto {physical_key} premuto, nessuna azione configurata");
             continue;
         };
 
         println!("Tasto {physical_key} premuto: eseguo azione");
-        let result = actions::execute(&ha_client, &config.home_assistant, &key_config.action).await;
+        let result = actions::execute(&ha_client, &config.home_assistant, action).await;
+        drop(config);
 
         let (success, message) = match &result {
             Ok(()) => (true, "OK".to_string()),

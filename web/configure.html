@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Configura — Streamdeck HA Bridge</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f5f5f7;
+    --card-bg: #ffffff;
+    --text: #1c1c1e;
+    --muted: #6e6e73;
+    --border: #e0e0e2;
+    --ok: #1e8e3e;
+    --err: #c5221f;
+    --accent: #0a66ff;
+    --input-bg: #f0f0f2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181a;
+      --card-bg: #232427;
+      --text: #f0f0f2;
+      --muted: #9a9aa0;
+      --border: #3a3b3e;
+      --ok: #3ddc73;
+      --err: #ff6b64;
+      --accent: #4c8dff;
+      --input-bg: #2c2d31;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    justify-content: center;
+    padding: 2.5rem 1rem;
+  }
+  main {
+    width: 100%;
+    max-width: 720px;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  nav {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 0.5rem;
+  }
+  h1 { font-size: 1.4rem; margin: 0; }
+  nav a {
+    color: var(--accent);
+    text-decoration: none;
+    font-size: 0.9rem;
+  }
+  nav a:hover { text-decoration: underline; }
+
+  .key-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.1rem 1.3rem;
+    display: flex;
+    gap: 1rem;
+    align-items: flex-start;
+  }
+  .key-badge {
+    flex: 0 0 auto;
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    background: var(--input-bg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+  }
+  .key-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+  }
+  .icon-row {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+  }
+  .icon-preview {
+    width: 48px;
+    height: 48px;
+    border-radius: 8px;
+    background: var(--input-bg);
+    object-fit: cover;
+    border: 1px solid var(--border);
+  }
+  .icon-preview.empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    font-size: 0.7rem;
+    text-align: center;
+  }
+  input[type="file"] { font-size: 0.85rem; max-width: 220px; }
+  .action-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+  }
+  .action-fields {
+    display: flex;
+    gap: 0.6rem;
+    flex: 1;
+    min-width: 260px;
+  }
+  .action-fields input, .action-fields select { flex: 1; min-width: 0; }
+  input[type="text"], select {
+    background: var(--input-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.5rem 0.6rem;
+    color: var(--text);
+    font-size: 0.9rem;
+  }
+  button {
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 0.5rem 0.9rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button.secondary {
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid var(--border);
+  }
+  .status-line {
+    font-size: 0.8rem;
+    color: var(--muted);
+    min-height: 1em;
+  }
+  .status-line.ok { color: var(--ok); }
+  .status-line.err { color: var(--err); }
+  .hint { color: var(--muted); font-size: 0.78rem; }
+</style>
+</head>
+<body>
+<main>
+  <nav>
+    <h1>Configura tasti</h1>
+    <a href="/">← Monitor</a>
+  </nav>
+  <p class="hint">Carica un'icona per tasto (viene scritta subito sul deck) e imposta l'azione da eseguire al rilascio: una chiamata a un servizio Home Assistant, oppure una richiesta HTTP a un URL qualsiasi. Le modifiche si salvano subito in config.toml.</p>
+
+  <div id="keys-container"></div>
+</main>
+
+<script>
+const container = document.getElementById("keys-container");
+
+function iconPreviewMarkup(icon) {
+  if (icon) {
+    return '<img class="icon-preview" src="/' + icon + '?t=' + Date.now() + '">';
+  }
+  return '<div class="icon-preview empty">nessuna</div>';
+}
+
+const HTTP_METHODS = ["POST", "GET", "PUT", "PATCH", "DELETE"];
+
+function keyCardMarkup(k) {
+  const action = k.action || {};
+  const type = action.type || "home_assistant";
+  const isUrl = type === "url";
+  const method = action.method || "POST";
+
+  return `
+    <div class="key-card" data-key="${k.key}">
+      <div class="key-badge">${k.key}</div>
+      <div class="key-body">
+        <div class="icon-row">
+          ${iconPreviewMarkup(k.icon)}
+          <input type="file" accept="image/*" class="icon-input">
+        </div>
+        <div class="action-row">
+          <select class="action-type">
+            <option value="home_assistant" ${!isUrl ? "selected" : ""}>Home Assistant</option>
+            <option value="url" ${isUrl ? "selected" : ""}>Chiamata URL</option>
+          </select>
+          <div class="action-fields ha-fields" style="display:${isUrl ? "none" : "flex"}">
+            <input type="text" class="service-input" placeholder="dominio.servizio (es. light.toggle)" value="${action.service || ''}">
+            <input type="text" class="entity-input" placeholder="entity_id (es. light.soggiorno)" value="${action.entity_id || ''}">
+          </div>
+          <div class="action-fields url-fields" style="display:${isUrl ? "flex" : "none"}">
+            <input type="text" class="url-input" placeholder="https://esempio.local/webhook" value="${action.url || ''}">
+            <select class="method-input">
+              ${HTTP_METHODS.map(m => `<option value="${m}" ${m === method ? "selected" : ""}>${m}</option>`).join("")}
+            </select>
+          </div>
+          <button class="save-action-btn">Salva azione</button>
+        </div>
+        <div class="status-line"></div>
+      </div>
+    </div>
+  `;
+}
+
+function attachIconHandler(card, key, statusEl) {
+  card.querySelector(".icon-input").addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    statusEl.textContent = "caricamento…";
+    statusEl.className = "status-line";
+    const form = new FormData();
+    form.append("icon", file);
+    try {
+      const res = await fetch(`/api/keys/${key}/icon`, { method: "POST", body: form });
+      if (!res.ok) throw new Error(await res.text());
+      const updated = await res.json();
+      card.querySelector(".icon-row").innerHTML =
+        iconPreviewMarkup(updated.icon) + '<input type="file" accept="image/*" class="icon-input">';
+      attachIconHandler(card, key, statusEl);
+      statusEl.textContent = "icona caricata e scritta sul deck";
+      statusEl.className = "status-line ok";
+    } catch (err) {
+      statusEl.textContent = "errore: " + err.message;
+      statusEl.className = "status-line err";
+    }
+  });
+}
+
+async function loadKeys() {
+  const res = await fetch("/api/keys");
+  const keys = await res.json();
+  container.innerHTML = keys.map(keyCardMarkup).join("");
+
+  container.querySelectorAll(".key-card").forEach((card) => {
+    const key = card.dataset.key;
+    const statusEl = card.querySelector(".status-line");
+
+    attachIconHandler(card, key, statusEl);
+
+    card.querySelector(".action-type").addEventListener("change", (e) => {
+      const isUrl = e.target.value === "url";
+      card.querySelector(".ha-fields").style.display = isUrl ? "none" : "flex";
+      card.querySelector(".url-fields").style.display = isUrl ? "flex" : "none";
+    });
+
+    card.querySelector(".save-action-btn").addEventListener("click", async () => {
+      const type = card.querySelector(".action-type").value;
+      let body;
+
+      if (type === "home_assistant") {
+        const service = card.querySelector(".service-input").value.trim();
+        const entityId = card.querySelector(".entity-input").value.trim();
+        if (!service || !entityId) {
+          statusEl.textContent = "compila service ed entity_id";
+          statusEl.className = "status-line err";
+          return;
+        }
+        body = { type: "home_assistant", service, entity_id: entityId };
+      } else {
+        const url = card.querySelector(".url-input").value.trim();
+        const method = card.querySelector(".method-input").value;
+        if (!url) {
+          statusEl.textContent = "inserisci un url";
+          statusEl.className = "status-line err";
+          return;
+        }
+        body = { type: "url", url, method };
+      }
+
+      statusEl.textContent = "salvataggio…";
+      statusEl.className = "status-line";
+      try {
+        const res = await fetch(`/api/keys/${key}/action`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        statusEl.textContent = "azione salvata";
+        statusEl.className = "status-line ok";
+      } catch (err) {
+        statusEl.textContent = "errore: " + err.message;
+        statusEl.className = "status-line err";
+      }
+    });
+  });
+}
+
+loadKeys();
+</script>
+</body>
+</html>

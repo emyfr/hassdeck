@@ -34,5 +34,22 @@ pub async fn execute(
 
             Ok(())
         }
+
+        Action::Url { url, method } => {
+            let method_name = method.as_deref().unwrap_or("POST");
+            let method: reqwest::Method = method_name
+                .parse()
+                .map_err(|_| anyhow::anyhow!("metodo HTTP non valido: '{method_name}'"))?;
+
+            let response = client.request(method, url).send().await?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                anyhow::bail!("La chiamata a {url} ha risposto {status}: {body}");
+            }
+
+            Ok(())
+        }
     }
 }
