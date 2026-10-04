@@ -14,4 +14,6 @@ toml = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 anyhow = "1"
 axum = { version = "0.8", features = ["ws", "multipart"] }
+argon2 = "0.5"
+rand_core = { version = "0.6", features = ["getrandom"] }
 tower-http = { version = "0.6", features = ["fs"] }

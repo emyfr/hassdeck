@@ -8,10 +8,15 @@ Vedi [ANALYSIS.md](./ANALYSIS.md) per l'analisi tecnica, le decisioni di scope e
 
 ## ⚠️ Sicurezza
 
-**L'interfaccia web non ha autenticazione.** Chiunque la raggiunga può cambiare le azioni dei tasti,
-eseguirle, sostituire le icone e modificare url e token di Home Assistant. Il token (che dà pieno
-controllo della tua istanza Home Assistant) non viene mai mostrato dall'interfaccia, ma è salvato in
-chiaro in `config.toml`.
+L'interfaccia web è protetta da una password. Al primo accesso la pagina `/login` chiede di
+crearla: **impostala subito dopo l'installazione**, perché finché manca chiunque raggiunga
+l'interfaccia può sceglierla. La password è salvata solo come hash argon2 (`[web] password_hash` in
+`config.toml`). Si cambia da `/impostazioni`; per reimpostarla, se la dimentichi, cancella quella riga
+e riavvia il servizio. Le sessioni durano 7 giorni e si perdono a ogni riavvio del servizio.
+
+Chi entra può cambiare le azioni dei tasti, eseguirle, sostituire le icone e modificare url e token di
+Home Assistant. Il token (che dà pieno controllo della tua istanza Home Assistant) non viene mai
+mostrato dall'interfaccia, ma è salvato in chiaro in `config.toml`.
 
 - Di default l'interfaccia è in ascolto solo su `127.0.0.1:8080`, cioè raggiungibile solo dal Raspberry
   stesso (es. via tunnel SSH: `ssh -L 8080:localhost:8080 utente@raspberry`).
@@ -21,10 +26,10 @@ chiaro in `config.toml`.
   bind = "0.0.0.0:8080"
   ```
   Fallo **solo su una LAN fidata**, e **non esporre mai la porta su internet** (niente port forwarding
-  o reverse proxy pubblico).
-- Anche su una LAN fidata, una pagina web malevola aperta da un browser della stessa rete può inviare
-  richieste all'interfaccia (es. "premi tasto"). Evita di associare ai tasti azioni sensibili come
-  l'apertura di serrature (`lock.unlock`) finché non sarà disponibile l'autenticazione.
+  o reverse proxy pubblico): l'interfaccia usa HTTP in chiaro, quindi password e cookie di sessione
+  viaggiano non cifrati.
+- Il cookie di sessione è `HttpOnly` e `SameSite=Strict`, quindi una pagina web di un altro sito
+  aperta nel browser non può usare la tua sessione per inviare richieste all'interfaccia.
 - Il servizio systemd gira come utente di sistema non privilegiato `streamdeck`; l'accesso al
   dispositivo USB (`/dev/hidraw*`) è concesso da una regola udev dedicata.
 - Proteggi `config.toml`: `chmod 600 config.toml`.

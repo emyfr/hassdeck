@@ -1,4 +1,5 @@
 mod actions;
+mod auth;
 mod config;
 mod icons;
 mod keymap;
@@ -68,6 +69,7 @@ async fn main() -> anyhow::Result<()> {
         icons_dir: Arc::new(PathBuf::from(ICONS_DIR)),
         icon_cache: icon_cache.clone(),
         ha_client: reqwest::Client::new(),
+        auth: auth::Auth::default(),
     };
 
     let web_addr = {

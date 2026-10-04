@@ -21,12 +21,17 @@ fn default_brightness() -> u8 {
 pub struct WebConfig {
     #[serde(default = "default_web_bind")]
     pub bind: String,
+    /// Hash argon2 della password dell'interfaccia web. Se assente, al primo
+    /// accesso l'interfaccia chiede di crearne una (vedi `auth.rs`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub password_hash: Option<String>,
 }
 
 impl Default for WebConfig {
     fn default() -> Self {
         Self {
             bind: default_web_bind(),
+            password_hash: None,
         }
     }
 }

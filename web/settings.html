@@ -126,6 +126,7 @@
     <div class="links">
       <a href="/">Monitor</a>
       <a href="/configura">Configura</a>
+      <a href="#" id="logout-link">Esci</a>
     </div>
   </nav>
 
@@ -153,9 +154,41 @@
     </div>
     <div class="status-line" id="status-line"></div>
   </div>
+
+  <form class="card" id="password-form">
+    <p class="hint">Password di accesso a questa interfaccia. Cambiandola, tutte le altre sessioni aperte vengono chiuse.</p>
+    <label>
+      Password attuale
+      <input type="password" id="pw-current" autocomplete="current-password" required>
+    </label>
+    <label>
+      Nuova password (almeno 8 caratteri)
+      <input type="password" id="pw-new" autocomplete="new-password" minlength="8" required>
+    </label>
+    <label>
+      Ripeti nuova password
+      <input type="password" id="pw-confirm" autocomplete="new-password" minlength="8" required>
+    </label>
+    <div class="actions-row">
+      <button type="submit">Cambia password</button>
+    </div>
+    <div class="status-line" id="pw-status"></div>
+  </form>
 </main>
 
 <script>
+// Sessione scaduta o assente: torna alla pagina di login.
+const originalFetch = window.fetch;
+window.fetch = async (...args) => {
+  const res = await originalFetch(...args);
+  if (res.status === 401) location.href = "/login";
+  return res;
+};
+document.getElementById("logout-link").addEventListener("click", async (e) => {
+  e.preventDefault();
+  await originalFetch("/api/auth/logout", { method: "POST" });
+  location.href = "/login";
+});
 const urlEl = document.getElementById("url");
 const tokenEl = document.getElementById("token");
 const verifyTlsEl = document.getElementById("verify-tls");
@@ -221,6 +254,36 @@ document.getElementById("test-btn").addEventListener("click", async () => {
     }
   } catch (err) {
     setStatus("errore: " + err.message, "err");
+  }
+});
+
+const passwordForm = document.getElementById("password-form");
+const pwStatusEl = document.getElementById("pw-status");
+
+passwordForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const current = document.getElementById("pw-current").value;
+  const next = document.getElementById("pw-new").value;
+  if (next !== document.getElementById("pw-confirm").value) {
+    pwStatusEl.textContent = "le due password non coincidono";
+    pwStatusEl.className = "status-line err";
+    return;
+  }
+  pwStatusEl.textContent = "salvataggio…";
+  pwStatusEl.className = "status-line";
+  try {
+    const res = await fetch("/api/auth/password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ current, new: next }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    passwordForm.reset();
+    pwStatusEl.textContent = "password cambiata";
+    pwStatusEl.className = "status-line ok";
+  } catch (err) {
+    pwStatusEl.textContent = "errore: " + err.message;
+    pwStatusEl.className = "status-line err";
   }
 });
 

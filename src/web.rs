@@ -16,6 +16,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::{broadcast, RwLock};
 
 use crate::actions;
+use crate::auth::{self, Auth};
 use crate::config::{self, Action, Config, HomeAssistantConfig};
 use crate::icons::{self, IconCache};
 use mirajazz::device::Device;
@@ -64,6 +65,7 @@ pub struct AppState {
     pub icons_dir: Arc<PathBuf>,
     pub icon_cache: IconCache,
     pub ha_client: reqwest::Client,
+    pub auth: Auth,
 }
 
 /// Durata (ms) del lampeggio "premuto" mostrato quando il tasto viene
@@ -462,6 +464,15 @@ async fn test_home_assistant_settings(
 
 fn router(state: AppState) -> Router {
     let icons_dir = (*state.icons_dir).clone();
+
+    // Rotte raggiungibili senza sessione: solo quelle necessarie per creare
+    // la password o fare login.
+    let public = Router::new()
+        .route("/login", get(auth::login_page))
+        .route("/api/auth/status", get(auth::status_handler))
+        .route("/api/auth/setup", axum::routing::post(auth::setup_handler))
+        .route("/api/auth/login", axum::routing::post(auth::login_handler));
+
     Router::new()
         .route("/", get(index_handler))
         .route("/configura", get(configure_handler))
@@ -500,7 +511,17 @@ fn router(state: AppState) -> Router {
             "/api/home_assistant/services",
             get(list_home_assistant_services),
         )
+        .route("/api/auth/logout", axum::routing::post(auth::logout_handler))
+        .route(
+            "/api/auth/password",
+            axum::routing::post(auth::change_password_handler),
+        )
         .nest_service("/icons", tower_http::services::ServeDir::new(icons_dir))
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_session,
+        ))
+        .merge(public)
         .with_state(state)
 }
 

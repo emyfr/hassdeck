@@ -187,6 +187,7 @@
     <div style="display:flex; gap:1rem;">
       <a href="/">Monitor</a>
       <a href="/impostazioni">Impostazioni</a>
+      <a href="#" id="logout-link">Esci</a>
     </div>
   </nav>
   <p class="hint">Carica un'icona per tasto (viene scritta subito sul deck) e imposta l'azione da eseguire al rilascio: una chiamata a un servizio Home Assistant, oppure una richiesta HTTP a un URL qualsiasi. Le modifiche si salvano subito in config.toml.</p>
@@ -196,6 +197,18 @@
 </main>
 
 <script>
+// Sessione scaduta o assente: torna alla pagina di login.
+const originalFetch = window.fetch;
+window.fetch = async (...args) => {
+  const res = await originalFetch(...args);
+  if (res.status === 401) location.href = "/login";
+  return res;
+};
+document.getElementById("logout-link").addEventListener("click", async (e) => {
+  e.preventDefault();
+  await originalFetch("/api/auth/logout", { method: "POST" });
+  location.href = "/login";
+});
 const container = document.getElementById("keys-container");
 
 // Domini con senso come azione da tasto (esclude sensor/binary_sensor/update/
