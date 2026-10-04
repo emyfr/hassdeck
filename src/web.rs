@@ -342,14 +342,55 @@ async fn clear_action_handler(
     Ok(Json(key_config_view(&config, key)))
 }
 
-async fn get_home_assistant_settings(State(state): State<AppState>) -> Json<HomeAssistantConfig> {
-    Json(state.config.read().await.home_assistant.clone())
+/// Vista delle impostazioni Home Assistant restituita al browser: il token
+/// non viene mai rimandato indietro, si indica solo se e' impostato.
+#[derive(Debug, Serialize)]
+struct HomeAssistantSettingsView {
+    url: String,
+    token_set: bool,
+    verify_tls: bool,
+}
+
+impl From<&HomeAssistantConfig> for HomeAssistantSettingsView {
+    fn from(ha: &HomeAssistantConfig) -> Self {
+        Self {
+            url: ha.url.clone(),
+            token_set: !ha.token.trim().is_empty(),
+            verify_tls: ha.verify_tls,
+        }
+    }
+}
+
+/// Se il form arriva con il token vuoto, riusa quello gia' salvato — ma solo
+/// se l'url non cambia, altrimenti chiunque raggiunga l'interfaccia potrebbe
+/// puntare l'url verso un proprio server e farsi inviare il token salvato.
+fn fill_saved_token(
+    body: &mut HomeAssistantConfig,
+    saved: &HomeAssistantConfig,
+) -> Result<(), String> {
+    if !body.token.trim().is_empty() {
+        return Ok(());
+    }
+    if saved.token.trim().is_empty() {
+        return Ok(());
+    }
+    if body.url.trim_end_matches('/') != saved.url.trim_end_matches('/') {
+        return Err("hai cambiato l'url: inserisci di nuovo il token".to_string());
+    }
+    body.token = saved.token.clone();
+    Ok(())
+}
+
+async fn get_home_assistant_settings(
+    State(state): State<AppState>,
+) -> Json<HomeAssistantSettingsView> {
+    Json((&state.config.read().await.home_assistant).into())
 }
 
 async fn set_home_assistant_settings(
     State(state): State<AppState>,
-    Json(body): Json<HomeAssistantConfig>,
-) -> Result<Json<HomeAssistantConfig>, (StatusCode, String)> {
+    Json(mut body): Json<HomeAssistantConfig>,
+) -> Result<Json<HomeAssistantSettingsView>, (StatusCode, String)> {
     if !body.url.trim().is_empty()
         && !(body.url.starts_with("http://") || body.url.starts_with("https://"))
     {
@@ -357,10 +398,11 @@ async fn set_home_assistant_settings(
     }
 
     let mut config = state.config.write().await;
+    fill_saved_token(&mut body, &config.home_assistant).map_err(bad_request)?;
     config.home_assistant = body;
     config::save(&config, &state.config_path).map_err(internal_err)?;
 
-    Ok(Json(config.home_assistant.clone()))
+    Ok(Json((&config.home_assistant).into()))
 }
 
 #[derive(Debug, Serialize)]
@@ -396,8 +438,16 @@ async fn list_home_assistant_services(
 }
 
 async fn test_home_assistant_settings(
-    Json(body): Json<HomeAssistantConfig>,
+    State(state): State<AppState>,
+    Json(mut body): Json<HomeAssistantConfig>,
 ) -> Json<TestConnectionResult> {
+    let saved = state.config.read().await.home_assistant.clone();
+    if let Err(message) = fill_saved_token(&mut body, &saved) {
+        return Json(TestConnectionResult {
+            success: false,
+            message,
+        });
+    }
     match actions::test_home_assistant_connection(&body).await {
         Ok(message) => Json(TestConnectionResult {
             success: true,

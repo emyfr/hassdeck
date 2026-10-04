@@ -179,7 +179,10 @@ async function load() {
     const res = await fetch("/api/settings/home_assistant");
     const settings = await res.json();
     urlEl.value = settings.url || "";
-    tokenEl.value = settings.token || "";
+    tokenEl.value = "";
+    if (settings.token_set) {
+      tokenEl.placeholder = "token già impostato — lascia vuoto per mantenerlo";
+    }
     verifyTlsEl.checked = settings.verify_tls !== false;
   } catch (e) {
     setStatus("impossibile caricare le impostazioni attuali", "err");
@@ -196,6 +199,7 @@ document.getElementById("save-btn").addEventListener("click", async () => {
     });
     if (!res.ok) throw new Error(await res.text());
     setStatus("impostazioni salvate", "ok");
+    load();
   } catch (err) {
     setStatus("errore: " + err.message, "err");
   }

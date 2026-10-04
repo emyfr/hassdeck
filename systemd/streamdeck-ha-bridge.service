@@ -5,8 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/<utente>/streamdeck-ha-bridge
-ExecStart=/home/<utente>/streamdeck-ha-bridge/target/release/streamdeck-ha-bridge /home/<utente>/streamdeck-ha-bridge/config.toml
+WorkingDirectory=/opt/streamdeck-ha-bridge
+ExecStart=/opt/streamdeck-ha-bridge/target/release/streamdeck-ha-bridge /opt/streamdeck-ha-bridge/config.toml
 Restart=on-failure
 RestartSec=3
 User=root

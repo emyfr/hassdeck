@@ -2,6 +2,12 @@
 
 brightness = 80
 
+[web]
+# Di default l'interfaccia web e' raggiungibile solo dal Raspberry stesso.
+# Per usarla dalla LAN (solo se fidata: non c'e' autenticazione, vedi README):
+# bind = "0.0.0.0:8080"
+bind = "127.0.0.1:8080"
+
 [home_assistant]
 url = "http://homeassistant.local:8123"
 token = "IL_TUO_LONG_LIVED_ACCESS_TOKEN"

@@ -31,8 +31,11 @@ impl Default for WebConfig {
     }
 }
 
+/// Di default l'interfaccia web e' raggiungibile solo dalla macchina locale,
+/// dato che non ha autenticazione: esporla in LAN e' una scelta esplicita
+/// (`bind = "0.0.0.0:8080"`), vedi la sezione Sicurezza nel README.
 fn default_web_bind() -> String {
-    "0.0.0.0:8080".to_string()
+    "127.0.0.1:8080".to_string()
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
