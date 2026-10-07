@@ -22,6 +22,9 @@ const SEGMENT_SIZE: u32 = 95;
 const SEGMENT_COUNT: usize = 3;
 const BAR_HEIGHT: u32 = SEGMENT_SIZE * SEGMENT_COUNT as u32;
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
+/// Giri consecutivi con scritture fallite dopo cui il deck e' considerato
+/// perso e il servizio esce, per farsi riavviare da systemd.
+const MAX_WRITE_FAILURES: u32 = 3;
 
 const EMPTY_COLOR: [u8; 3] = [0, 0, 0];
 /// Colore uniforme mostrato quando il sensore non e' leggibile, per non
@@ -144,6 +147,7 @@ async fn read_bar(state: &AppState) -> (BarStatus, [Segment; SEGMENT_COUNT]) {
 pub async fn run(state: AppState) {
     let mut shown: Option<[Segment; SEGMENT_COUNT]> = None;
     let mut last_error: Option<String> = None;
+    let mut write_failures = 0;
 
     loop {
         let (status, segments) = read_bar(&state).await;
@@ -168,6 +172,11 @@ pub async fn run(state: AppState) {
         }
         // Dopo un errore riscrive tutte le zone al giro successivo.
         shown = if write_failed { None } else { Some(segments) };
+        write_failures = if write_failed { write_failures + 1 } else { 0 };
+        if write_failures >= MAX_WRITE_FAILURES {
+            eprintln!("Barra: il deck non accetta piu' scritture, esco per riconnettermi");
+            std::process::exit(1);
+        }
 
         *state.bar_status.write().await = status.clone();
         let _ = state.events.send(KeyEvent::Bar(status));

@@ -113,8 +113,11 @@ async fn main() -> anyhow::Result<()> {
     let reader = device.get_reader(on_key_event);
     let reader_task = tokio::spawn(async move {
         loop {
-            if reader.read(None).await.is_err() {
-                break;
+            if let Err(e) = reader.read(None).await {
+                // Deck scollegato o controller USB caduto: esce con errore,
+                // cosi' systemd riavvia il servizio e si ricollega al deck.
+                eprintln!("Lettura dal deck fallita, esco per riconnettermi: {e}");
+                std::process::exit(1);
             }
         }
     });

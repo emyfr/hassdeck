@@ -70,7 +70,8 @@ Raspberry: in quel caso compila con `cargo build --release -j 1`.
 
 Il file di unit in `systemd/hassdeck.service` assume che il progetto sia in
 `/opt/hassdeck` — adatta i percorsi (`WorkingDirectory`, `ExecStart`, `ReadWritePaths`) se diverso.
-Il servizio riparte automaticamente in caso di crash (`Restart=on-failure`) e i log sono consultabili con:
+Il servizio riparte automaticamente in caso di crash (`Restart=on-failure`), e anche quando il deck viene
+scollegato: appena lo ricolleghi si riconnette da solo. I log sono consultabili con:
 
 ```
 journalctl -u hassdeck.service -f
