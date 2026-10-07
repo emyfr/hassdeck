@@ -38,7 +38,7 @@ mostrato dall'interfaccia, ma è salvato in chiaro in `config.toml`.
 ## Installazione sul Raspberry Pi
 
 ```
-sudo git clone <url-del-repo> /opt/hassdeck
+sudo git clone https://github.com/emyfr/hassdeck.git /opt/hassdeck
 sudo chown -R $USER: /opt/hassdeck
 cd /opt/hassdeck
 cargo build --release
