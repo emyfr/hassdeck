@@ -32,7 +32,8 @@ mostrato dall'interfaccia, ma è salvato in chiaro in `config.toml`.
   aperta nel browser non può usare la tua sessione per inviare richieste all'interfaccia.
 - Il servizio systemd gira come utente di sistema non privilegiato `streamdeck`; l'accesso al
   dispositivo USB (`/dev/hidraw*`) è concesso da una regola udev dedicata.
-- Proteggi `config.toml`: `chmod 600 config.toml`.
+- `config.toml` contiene il token e l'hash della password: deve appartenere all'utente `streamdeck`
+  con permessi `600` (vedi installazione). Per leggerlo o modificarlo a mano serve `sudo`.
 
 ## Installazione sul Raspberry Pi
 
@@ -60,13 +61,32 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now streamdeck-ha-bridge.service
 ```
 
+Poi apri subito `http://<raspberry>:8080/login` e crea la password dell'interfaccia (vedi Sicurezza).
+
+Su un Raspberry Pi con alimentazione al limite la compilazione può causare undervoltage e bloccarlo:
+in quel caso compila con `cargo build --release -j 1`.
+
 Il file di unit in `systemd/streamdeck-ha-bridge.service` assume che il progetto sia in
-`/opt/streamdeck-ha-bridge` — adatta i percorsi (`WorkingDirectory`, `ExecStart`), `ReadWritePaths`) se diverso.
+`/opt/streamdeck-ha-bridge` — adatta i percorsi (`WorkingDirectory`, `ExecStart`, `ReadWritePaths`) se diverso.
 Il servizio riparte automaticamente in caso di crash (`Restart=on-failure`) e i log sono consultabili con:
 
 ```
 journalctl -u streamdeck-ha-bridge.service -f
 ```
+
+## Aggiornamento
+
+`config.toml` e `icons/` non sono tracciati da git, quindi un aggiornamento non li tocca:
+
+```
+cd /opt/streamdeck-ha-bridge
+git pull
+cargo build --release
+sudo systemctl restart streamdeck-ha-bridge.service
+```
+
+Se cambia il file di unit o la regola udev, ricopiali come nell'installazione (seguiti da
+`sudo systemctl daemon-reload` o `sudo udevadm control --reload`).
 
 ## Licenza
 
