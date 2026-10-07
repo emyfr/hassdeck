@@ -132,6 +132,14 @@
     line-height: 1.3;
   }
   .key.has-icon .key-badge { display: block; }
+  /* Tasto che mostra un dato di sistema al posto dell'icona. */
+  .key .key-system { display: none; flex-direction: column; align-items: center; line-height: 1.1; }
+  .key.has-system { background-image: none !important; background-color: #121216; color: #fff; }
+  .key.has-system .key-label { display: none; }
+  .key.has-system .key-system { display: flex; }
+  .key.has-system .key-badge { display: block; }
+  .key-system .sys-label, .key-system .sys-unit { font-size: 0.6rem; color: #a0a0aa; font-weight: 700; }
+  .key-system .sys-value { font-size: 1rem; font-weight: 700; }
   .key.pressed {
     background: var(--key-on);
     color: var(--key-on-text);
@@ -244,7 +252,9 @@ const keyEls = {};
 for (let k = 1; k <= 15; k++) {
   const el = document.createElement("div");
   el.className = "key";
-  el.innerHTML = `<span class="key-label">${k}</span><span class="key-badge">${k}</span>`;
+  el.innerHTML = `<span class="key-label">${k}</span>` +
+    `<span class="key-system"><span class="sys-label"></span><span class="sys-value"></span><span class="sys-unit"></span></span>` +
+    `<span class="key-badge">${k}</span>`;
   el.addEventListener("click", () => pressKeyFromWeb(k));
   KEYS_GRID.appendChild(el);
   keyEls[k] = el;
@@ -301,6 +311,9 @@ async function refreshIcons() {
     for (const k of keys) {
       const el = keyEls[k.key];
       if (!el) continue;
+      // Il valore arriva via WebSocket: qui si toglie solo il dato di
+      // sistema da un tasto che non lo mostra piu'.
+      if (!k.action || k.action.type !== "system") el.classList.remove("has-system");
       if (k.icon) {
         el.style.backgroundImage = `url(/${k.icon}?t=${Date.now()})`;
         el.classList.add("has-icon");
@@ -374,6 +387,15 @@ function connectWs() {
     const event = JSON.parse(msg.data);
     if (event.type === "bar") {
       renderBar(event);
+      return;
+    }
+    if (event.type === "system") {
+      const sysEl = keyEls[event.physical_key];
+      if (!sysEl) return;
+      sysEl.querySelector(".sys-label").textContent = event.label;
+      sysEl.querySelector(".sys-value").textContent = event.value;
+      sysEl.querySelector(".sys-unit").textContent = event.unit;
+      sysEl.classList.add("has-system");
       return;
     }
     const el = keyEls[event.physical_key];

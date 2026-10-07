@@ -194,7 +194,7 @@
       <a href="#" id="logout-link">Esci</a>
     </div>
   </nav>
-  <p class="hint">Carica un'icona per tasto (viene scritta subito sul deck) e imposta l'azione da eseguire al rilascio: una chiamata a un servizio Home Assistant, oppure una richiesta HTTP a un URL qualsiasi. Le modifiche si salvano subito in config.toml.</p>
+  <p class="hint">Carica un'icona per tasto (viene scritta subito sul deck) e imposta l'azione da eseguire al rilascio: una chiamata a un servizio Home Assistant, oppure una richiesta HTTP a un URL qualsiasi. In alternativa il tasto può mostrare un dato di sistema del Raspberry (CPU, temperatura, tensione…) al posto dell'icona. Le modifiche si salvano subito in config.toml.</p>
   <p class="hint status-line err" id="entities-hint" style="display:none;"></p>
 
   <div class="key-card" id="barra">
@@ -276,6 +276,18 @@ function entityLabel(entityId, list = ENTITIES) {
 
 let SERVICES = [];
 let servicesError = null;
+
+// Parametri di sistema mostrabili su un tasto (da /api/system/metrics).
+let METRICS = [];
+
+async function loadMetrics() {
+  try {
+    const res = await fetch("/api/system/metrics");
+    if (res.ok) METRICS = await res.json();
+  } catch (err) {
+    METRICS = [];
+  }
+}
 
 async function loadServices() {
   try {
@@ -427,10 +439,23 @@ function iconPreviewMarkup(icon) {
 
 const HTTP_METHODS = ["POST", "GET", "PUT", "PATCH", "DELETE"];
 
+function metricOptionsMarkup(current) {
+  const known = METRICS.some((m) => m.id === current);
+  let options = METRICS
+    .map((m) => `<option value="${escapeHtml(m.id)}" ${m.id === current ? "selected" : ""}>${escapeHtml(m.name)} (${escapeHtml(m.unit)})</option>`)
+    .join("");
+  if (current && !known) {
+    options += `<option value="${escapeHtml(current)}" selected>${escapeHtml(current)} (sconosciuto)</option>`;
+  }
+  return options || `<option value="">nessun parametro disponibile</option>`;
+}
+
 function keyCardMarkup(k) {
   const action = k.action || {};
   const type = action.type || "home_assistant";
   const isUrl = type === "url";
+  const isSystem = type === "system";
+  const isHa = !isUrl && !isSystem;
   const method = action.method || "POST";
 
   return `
@@ -443,10 +468,11 @@ function keyCardMarkup(k) {
         </div>
         <div class="action-row">
           <select class="action-type">
-            <option value="home_assistant" ${!isUrl ? "selected" : ""}>Home Assistant</option>
+            <option value="home_assistant" ${isHa ? "selected" : ""}>Home Assistant</option>
             <option value="url" ${isUrl ? "selected" : ""}>Chiamata URL</option>
+            <option value="system" ${isSystem ? "selected" : ""}>Dato di sistema</option>
           </select>
-          <div class="action-fields ha-fields" style="display:${isUrl ? "none" : "flex"}">
+          <div class="action-fields ha-fields" style="display:${isHa ? "flex" : "none"}">
             ${entityFieldMarkup(action.entity_id || '')}
             ${serviceFieldMarkup(action.service || '', action.entity_id || '')}
           </div>
@@ -455,6 +481,9 @@ function keyCardMarkup(k) {
             <select class="method-input">
               ${HTTP_METHODS.map(m => `<option value="${m}" ${m === method ? "selected" : ""}>${m}</option>`).join("")}
             </select>
+          </div>
+          <div class="action-fields system-fields" style="display:${isSystem ? "flex" : "none"}">
+            <select class="metric-input">${metricOptionsMarkup(action.metric || "")}</select>
           </div>
           <button class="save-action-btn">Salva azione</button>
         </div>
@@ -489,7 +518,7 @@ function attachIconHandler(card, key, statusEl) {
 }
 
 async function loadKeys() {
-  await Promise.all([loadEntities(), loadServices()]);
+  await Promise.all([loadEntities(), loadServices(), loadMetrics()]);
   const entitiesHintEl = document.getElementById("entities-hint");
   const hintMessages = [];
   if (entitiesError) hintMessages.push("entità (" + entitiesError + ")");
@@ -532,9 +561,10 @@ async function loadKeys() {
     refreshServiceSelect();
 
     card.querySelector(".action-type").addEventListener("change", (e) => {
-      const isUrl = e.target.value === "url";
-      card.querySelector(".ha-fields").style.display = isUrl ? "none" : "flex";
-      card.querySelector(".url-fields").style.display = isUrl ? "flex" : "none";
+      const type = e.target.value;
+      card.querySelector(".ha-fields").style.display = type === "home_assistant" ? "flex" : "none";
+      card.querySelector(".url-fields").style.display = type === "url" ? "flex" : "none";
+      card.querySelector(".system-fields").style.display = type === "system" ? "flex" : "none";
     });
 
     card.querySelector(".save-action-btn").addEventListener("click", async () => {
@@ -562,6 +592,14 @@ async function loadKeys() {
           return;
         }
         body = { type: "home_assistant", service, entity_id: entityId };
+      } else if (type === "system") {
+        const metric = card.querySelector(".metric-input").value;
+        if (!metric) {
+          statusEl.textContent = "scegli un parametro";
+          statusEl.className = "status-line err";
+          return;
+        }
+        body = { type: "system", metric };
       } else {
         const url = card.querySelector(".url-input").value.trim();
         const method = card.querySelector(".method-input").value;

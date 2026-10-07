@@ -4,6 +4,7 @@ mod bar;
 mod config;
 mod icons;
 mod keymap;
+mod system;
 mod web;
 
 use image::open as open_image;
@@ -73,6 +74,7 @@ async fn main() -> anyhow::Result<()> {
         auth: auth::Auth::default(),
         bar_status: Arc::new(RwLock::new(bar::BarStatus::default())),
         bar_wake: Arc::new(Notify::new()),
+        system_wake: Arc::new(Notify::new()),
     };
 
     let web_addr = {
@@ -106,6 +108,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     tokio::spawn(bar::run(app_state.clone()));
+    tokio::spawn(system::run(app_state.clone()));
 
     let (tx, mut rx) = mpsc::unbounded_channel();
     KEY_EVENTS.set(tx).ok();

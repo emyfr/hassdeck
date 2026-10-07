@@ -93,6 +93,17 @@ max = 2500.0   # nell'unità del sensore (es. W o kW)
 
 Il valore viene letto ogni 2 secondi; se il sensore non è disponibile la barra diventa grigia.
 
+## Dati di sistema sui tasti
+
+Oltre a eseguire un'azione (Home Assistant o chiamata URL), un tasto può mostrare un dato del
+Raspberry al posto dell'icona: utilizzo CPU, temperatura, tensione di alimentazione, RAM. Si sceglie da
+`/configura` con il tipo "Dato di sistema"; il valore si aggiorna ogni 2 secondi. L'elenco completo dei
+parametri leggibili, compresi quelli non ancora selezionabili, è in
+[docs/parametri-sistema.md](./docs/parametri-sistema.md).
+
+La tensione di alimentazione si legge con `vcgencmd`, che richiede il gruppo `video`: la unit systemd
+lo assegna al servizio con `SupplementaryGroups=video`.
+
 ## Aggiornamento
 
 `config.toml` e `icons/` non sono tracciati da git, quindi un aggiornamento non li tocca:

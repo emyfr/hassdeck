@@ -93,7 +93,8 @@ pub struct KeyConfig {
 
 /// Tipo di azione eseguita alla pressione di un tasto. Home Assistant è il
 /// primo tipo implementato; altri tipi (webhook, comando shell locale) si
-/// aggiungono come nuove varianti, vedi ANALYSIS.md.
+/// aggiungono come nuove varianti, vedi ANALYSIS.md. `System` non esegue
+/// nulla alla pressione: il tasto mostra un dato di sistema (vedi `system.rs`).
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Action {
@@ -103,6 +104,7 @@ pub enum Action {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         method: Option<String>,
     },
+    System { metric: String },
 }
 
 pub fn load(path: &Path) -> anyhow::Result<Config> {

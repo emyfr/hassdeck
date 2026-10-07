@@ -20,6 +20,7 @@ use crate::auth::{self, Auth};
 use crate::bar::{BarStatus, SharedBarStatus};
 use crate::config::{self, Action, BarConfig, Config, HomeAssistantConfig};
 use crate::icons::{self, IconCache};
+use crate::system;
 use mirajazz::device::Device;
 
 #[derive(Debug, Clone, Serialize)]
@@ -55,6 +56,12 @@ pub enum KeyEvent {
     Key { physical_key: u8, pressed: bool },
     ActionResult { physical_key: u8, success: bool },
     Bar(BarStatus),
+    System {
+        physical_key: u8,
+        label: String,
+        value: String,
+        unit: String,
+    },
 }
 
 #[derive(Clone)]
@@ -71,6 +78,8 @@ pub struct AppState {
     pub bar_status: SharedBarStatus,
     /// Sveglia il task della barra quando la sua configurazione cambia.
     pub bar_wake: Arc<Notify>,
+    /// Sveglia il task dei dati di sistema quando cambia l'azione di un tasto.
+    pub system_wake: Arc<Notify>,
 }
 
 /// Durata (ms) del lampeggio "premuto" mostrato quando il tasto viene
@@ -305,6 +314,11 @@ fn validate_action(action: &Action) -> Result<(), (StatusCode, String)> {
                 }
             }
         }
+        Action::System { metric } => {
+            if system::metric_info(metric).is_none() {
+                return Err(bad_request(format!("parametro di sistema sconosciuto: '{metric}'")));
+            }
+        }
     }
     Ok(())
 }
@@ -320,6 +334,7 @@ async fn set_action_handler(
     let mut config = state.config.write().await;
     config::set_key_action(&mut config, key, action);
     config::save(&config, &state.config_path).map_err(internal_err)?;
+    state.system_wake.notify_one();
 
     Ok(Json(key_config_view(&config, key)))
 }
@@ -345,6 +360,7 @@ async fn clear_action_handler(
     let mut config = state.config.write().await;
     config::clear_key_action(&mut config, key);
     config::save(&config, &state.config_path).map_err(internal_err)?;
+    state.system_wake.notify_one();
 
     Ok(Json(key_config_view(&config, key)))
 }
@@ -410,6 +426,10 @@ async fn set_home_assistant_settings(
     config::save(&config, &state.config_path).map_err(internal_err)?;
 
     Ok(Json((&config.home_assistant).into()))
+}
+
+async fn list_system_metrics() -> Json<&'static [system::MetricInfo]> {
+    Json(system::METRICS)
 }
 
 #[derive(Debug, Serialize)]
@@ -569,6 +589,7 @@ fn router(state: AppState) -> Router {
             "/api/home_assistant/services",
             get(list_home_assistant_services),
         )
+        .route("/api/system/metrics", get(list_system_metrics))
         .route(
             "/api/bar",
             get(get_bar_handler).put(set_bar_handler).delete(clear_bar_handler),

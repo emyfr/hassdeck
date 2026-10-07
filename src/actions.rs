@@ -251,6 +251,9 @@ pub async fn execute(
             Ok(())
         }
 
+        // Il tasto mostra un dato di sistema: nessuna azione alla pressione.
+        Action::System { .. } => Ok(()),
+
         Action::Url { url, method } => {
             let method_name = method.as_deref().unwrap_or("POST");
             let method: reqwest::Method = method_name

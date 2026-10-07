@@ -7,6 +7,8 @@ Wants=network-online.target
 Type=simple
 User=hassdeck
 Group=hassdeck
+# Per leggere la tensione di alimentazione con vcgencmd (/dev/vcio_gencmd).
+SupplementaryGroups=video
 WorkingDirectory=/opt/hassdeck
 ExecStart=/opt/hassdeck/target/release/hassdeck /opt/hassdeck/config.toml
 Restart=on-failure
