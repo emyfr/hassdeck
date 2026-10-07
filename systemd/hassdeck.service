@@ -1,14 +1,14 @@
 [Unit]
-Description=Streamdeck HA Bridge
+Description=hassdeck (deck USB per Home Assistant)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=streamdeck
-Group=streamdeck
-WorkingDirectory=/opt/streamdeck-ha-bridge
-ExecStart=/opt/streamdeck-ha-bridge/target/release/streamdeck-ha-bridge /opt/streamdeck-ha-bridge/config.toml
+User=hassdeck
+Group=hassdeck
+WorkingDirectory=/opt/hassdeck
+ExecStart=/opt/hassdeck/target/release/hassdeck /opt/hassdeck/config.toml
 Restart=on-failure
 RestartSec=3
 StandardOutput=journal
@@ -19,7 +19,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/opt/streamdeck-ha-bridge/config.toml /opt/streamdeck-ha-bridge/icons
+ReadWritePaths=/opt/hassdeck/config.toml /opt/hassdeck/icons
 
 [Install]
 WantedBy=multi-user.target

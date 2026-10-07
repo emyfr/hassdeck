@@ -1,4 +1,4 @@
-# streamdeck-ha-bridge
+# hassdeck
 
 Demone headless per Raspberry Pi che collega uno stream controller Soomfon XF-CN001
 (15 tasti LCD, hardware OEM HOTSPOTEK) a Home Assistant e altre azioni programmabili,
@@ -30,35 +30,35 @@ mostrato dall'interfaccia, ma è salvato in chiaro in `config.toml`.
   viaggiano non cifrati.
 - Il cookie di sessione è `HttpOnly` e `SameSite=Strict`, quindi una pagina web di un altro sito
   aperta nel browser non può usare la tua sessione per inviare richieste all'interfaccia.
-- Il servizio systemd gira come utente di sistema non privilegiato `streamdeck`; l'accesso al
+- Il servizio systemd gira come utente di sistema non privilegiato `hassdeck`; l'accesso al
   dispositivo USB (`/dev/hidraw*`) è concesso da una regola udev dedicata.
-- `config.toml` contiene il token e l'hash della password: deve appartenere all'utente `streamdeck`
+- `config.toml` contiene il token e l'hash della password: deve appartenere all'utente `hassdeck`
   con permessi `600` (vedi installazione). Per leggerlo o modificarlo a mano serve `sudo`.
 
 ## Installazione sul Raspberry Pi
 
 ```
-sudo git clone <url-del-repo> /opt/streamdeck-ha-bridge
-sudo chown -R $USER: /opt/streamdeck-ha-bridge
-cd /opt/streamdeck-ha-bridge
+sudo git clone <url-del-repo> /opt/hassdeck
+sudo chown -R $USER: /opt/hassdeck
+cd /opt/hassdeck
 cargo build --release
 cp config.example.toml config.toml   # e modifica url/token Home Assistant, o usa la pagina /impostazioni
 
 # utente di sistema per il servizio, proprietario dei soli file che scrive
-sudo useradd --system --user-group --no-create-home --home-dir /opt/streamdeck-ha-bridge \
-  --shell /usr/sbin/nologin streamdeck
+sudo useradd --system --user-group --no-create-home --home-dir /opt/hassdeck \
+  --shell /usr/sbin/nologin hassdeck
 mkdir -p icons
-sudo chown -R streamdeck:streamdeck config.toml icons
+sudo chown -R hassdeck:hassdeck config.toml icons
 sudo chmod 600 config.toml
 
-# accesso al deck (VID:PID 1500:3003) per il gruppo streamdeck
-sudo cp systemd/60-streamdeck-ha-bridge.rules /etc/udev/rules.d/
+# accesso al deck (VID:PID 1500:3003) per il gruppo hassdeck
+sudo cp systemd/60-hassdeck.rules /etc/udev/rules.d/
 sudo udevadm control --reload
 sudo udevadm trigger --subsystem-match=hidraw
 
-sudo cp systemd/streamdeck-ha-bridge.service /etc/systemd/system/
+sudo cp systemd/hassdeck.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now streamdeck-ha-bridge.service
+sudo systemctl enable --now hassdeck.service
 ```
 
 Poi apri subito `http://<raspberry>:8080/login` e crea la password dell'interfaccia (vedi Sicurezza).
@@ -66,12 +66,12 @@ Poi apri subito `http://<raspberry>:8080/login` e crea la password dell'interfac
 Su un Raspberry Pi con alimentazione al limite la compilazione può causare undervoltage e bloccarlo:
 in quel caso compila con `cargo build --release -j 1`.
 
-Il file di unit in `systemd/streamdeck-ha-bridge.service` assume che il progetto sia in
-`/opt/streamdeck-ha-bridge` — adatta i percorsi (`WorkingDirectory`, `ExecStart`, `ReadWritePaths`) se diverso.
+Il file di unit in `systemd/hassdeck.service` assume che il progetto sia in
+`/opt/hassdeck` — adatta i percorsi (`WorkingDirectory`, `ExecStart`, `ReadWritePaths`) se diverso.
 Il servizio riparte automaticamente in caso di crash (`Restart=on-failure`) e i log sono consultabili con:
 
 ```
-journalctl -u streamdeck-ha-bridge.service -f
+journalctl -u hassdeck.service -f
 ```
 
 ## Aggiornamento
@@ -79,10 +79,10 @@ journalctl -u streamdeck-ha-bridge.service -f
 `config.toml` e `icons/` non sono tracciati da git, quindi un aggiornamento non li tocca:
 
 ```
-cd /opt/streamdeck-ha-bridge
+cd /opt/hassdeck
 git pull
 cargo build --release
-sudo systemctl restart streamdeck-ha-bridge.service
+sudo systemctl restart hassdeck.service
 ```
 
 Se cambia il file di unit o la regola udev, ricopiali come nell'installazione (seguiti da

@@ -27,7 +27,7 @@ use tokio::sync::{Mutex, RwLock};
 use crate::config;
 use crate::web::AppState;
 
-const COOKIE_NAME: &str = "sdhb_session";
+const COOKIE_NAME: &str = "hassdeck_session";
 const SESSION_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 const MIN_PASSWORD_LEN: usize = 8;
 /// Attesa dopo un tentativo di login fallito. I tentativi sono serializzati
