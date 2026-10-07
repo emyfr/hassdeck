@@ -93,7 +93,7 @@ async fn main() -> anyhow::Result<()> {
             if let Some(icon_path) = &key_config.icon {
                 let image = open_image(icon_path)
                     .map_err(|e| anyhow::anyhow!("impossibile caricare icona '{icon_path}': {e}"))?;
-                let key_icons = icons::prepare_key_icons(key_config.key, image);
+                let key_icons = icons::prepare_key_icons(image);
                 icons::write_icon_to_device(&device, key_config.key, key_icons.normal.clone()).await?;
                 icon_cache.write().await.insert(key_config.key, key_icons);
                 println!("Icona caricata per tasto {}", key_config.key);

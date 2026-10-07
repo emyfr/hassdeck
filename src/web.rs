@@ -259,7 +259,7 @@ async fn upload_icon_handler(
     std::fs::write(&file_path, &bytes).map_err(internal_err)?;
     let icon_rel_path = format!("icons/{filename}");
 
-    let key_icons = icons::prepare_key_icons(key, image);
+    let key_icons = icons::prepare_key_icons(image);
     icons::write_icon_to_device(&state.device, key, key_icons.normal.clone())
         .await
         .map_err(internal_err)?;

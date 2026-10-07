@@ -14,13 +14,12 @@ use tokio::sync::RwLock;
 const PRESSED_TINT_COLOR: [u8; 3] = [255, 140, 0];
 const PRESSED_TINT_ALPHA: f32 = 0.65;
 
-pub fn image_format_for_write_index(index: u8) -> ImageFormat {
-    // Indice 17 = ultimo slot della barra verticale, dimensione diversa nel
-    // modello ereditato da AKP153 — non ancora confermata con un'icona reale.
-    let size = if index == 17 { (82, 82) } else { (95, 95) };
+/// Formato immagine del deck: tutti gli schermi, tasti e zone della barra,
+/// sono 95×95 (verificato con immagini di prova, vedi ANALYSIS.md).
+pub fn image_format() -> ImageFormat {
     ImageFormat {
         mode: ImageMode::JPEG,
-        size,
+        size: (95, 95),
         rotation: ImageRotation::Rot90,
         mirror: ImageMirroring::Both,
     }
@@ -56,9 +55,8 @@ pub fn new_icon_cache() -> IconCache {
 
 /// Ridimensiona l'icona caricata dall'utente alla dimensione corretta per il
 /// tasto e prepara subito anche la variante "premuta".
-pub fn prepare_key_icons(physical_key: u8, image: DynamicImage) -> KeyIcons {
-    let write_index = keymap::write_index_for_physical_key(physical_key);
-    let (w, h) = image_format_for_write_index(write_index).size;
+pub fn prepare_key_icons(image: DynamicImage) -> KeyIcons {
+    let (w, h) = image_format().size;
     let normal = image.resize_exact(w as u32, h as u32, FilterType::Lanczos3);
     let pressed = tint(&normal, PRESSED_TINT_COLOR, PRESSED_TINT_ALPHA);
     KeyIcons { normal, pressed }
@@ -70,8 +68,17 @@ pub async fn write_icon_to_device(
     image: DynamicImage,
 ) -> anyhow::Result<()> {
     let write_index = keymap::write_index_for_physical_key(physical_key);
-    let format = image_format_for_write_index(write_index);
-    device.set_button_image(write_index, format, image).await?;
+    write_image_to_index(device, write_index, image).await
+}
+
+/// Scrive un'immagine su uno schermo dato il suo indice logico di scrittura
+/// (0-14 tasti, 15-17 barra verticale).
+pub async fn write_image_to_index(
+    device: &Device,
+    write_index: u8,
+    image: DynamicImage,
+) -> anyhow::Result<()> {
+    device.set_button_image(write_index, image_format(), image).await?;
     device.flush().await?;
     Ok(())
 }
