@@ -501,6 +501,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
+name = "hassdeck"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "argon2",
+ "axum",
+ "image",
+ "mirajazz",
+ "rand_core 0.6.4",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+ "tower-http",
+]
+
+[[package]]
 name = "http"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1512,24 +1530,6 @@ name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
-
-[[package]]
-name = "hassdeck"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "argon2",
- "axum",
- "image",
- "mirajazz",
- "rand_core 0.6.4",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "toml",
- "tower-http",
-]
 
 [[package]]
 name = "subtle"
