@@ -5,13 +5,21 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+User=streamdeck
+Group=streamdeck
 WorkingDirectory=/opt/streamdeck-ha-bridge
 ExecStart=/opt/streamdeck-ha-bridge/target/release/streamdeck-ha-bridge /opt/streamdeck-ha-bridge/config.toml
 Restart=on-failure
 RestartSec=3
-User=root
 StandardOutput=journal
 StandardError=journal
+
+# Hardening: il servizio scrive solo config.toml e icons/
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/streamdeck-ha-bridge/config.toml /opt/streamdeck-ha-bridge/icons
 
 [Install]
 WantedBy=multi-user.target

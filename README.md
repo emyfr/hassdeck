@@ -25,17 +25,30 @@ chiaro in `config.toml`.
 - Anche su una LAN fidata, una pagina web malevola aperta da un browser della stessa rete può inviare
   richieste all'interfaccia (es. "premi tasto"). Evita di associare ai tasti azioni sensibili come
   l'apertura di serrature (`lock.unlock`) finché non sarà disponibile l'autenticazione.
-- Il servizio systemd gira come `root` per accedere al dispositivo USB (`/dev/hidraw*`).
+- Il servizio systemd gira come utente di sistema non privilegiato `streamdeck`; l'accesso al
+  dispositivo USB (`/dev/hidraw*`) è concesso da una regola udev dedicata.
 - Proteggi `config.toml`: `chmod 600 config.toml`.
 
 ## Installazione sul Raspberry Pi
 
 ```
 sudo git clone <url-del-repo> /opt/streamdeck-ha-bridge
+sudo chown -R $USER: /opt/streamdeck-ha-bridge
 cd /opt/streamdeck-ha-bridge
 cargo build --release
 cp config.example.toml config.toml   # e modifica url/token Home Assistant, o usa la pagina /impostazioni
-chmod 600 config.toml
+
+# utente di sistema per il servizio, proprietario dei soli file che scrive
+sudo useradd --system --user-group --no-create-home --home-dir /opt/streamdeck-ha-bridge \
+  --shell /usr/sbin/nologin streamdeck
+mkdir -p icons
+sudo chown -R streamdeck:streamdeck config.toml icons
+sudo chmod 600 config.toml
+
+# accesso al deck (VID:PID 1500:3003) per il gruppo streamdeck
+sudo cp systemd/60-streamdeck-ha-bridge.rules /etc/udev/rules.d/
+sudo udevadm control --reload
+sudo udevadm trigger --subsystem-match=hidraw
 
 sudo cp systemd/streamdeck-ha-bridge.service /etc/systemd/system/
 sudo systemctl daemon-reload
@@ -43,7 +56,7 @@ sudo systemctl enable --now streamdeck-ha-bridge.service
 ```
 
 Il file di unit in `systemd/streamdeck-ha-bridge.service` assume che il progetto sia in
-`/opt/streamdeck-ha-bridge` — adatta i percorsi (`WorkingDirectory`, `ExecStart`) se diverso.
+`/opt/streamdeck-ha-bridge` — adatta i percorsi (`WorkingDirectory`, `ExecStart`), `ReadWritePaths`) se diverso.
 Il servizio riparte automaticamente in caso di crash (`Restart=on-failure`) e i log sono consultabili con:
 
 ```
