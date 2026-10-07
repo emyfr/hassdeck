@@ -11,6 +11,19 @@ pub struct Config {
     pub keys: Vec<KeyConfig>,
     #[serde(default)]
     pub web: WebConfig,
+    /// Barra verticale come indicatore di livello di un sensore, vedi `bar.rs`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bar: Option<BarConfig>,
+}
+
+/// Sensore mostrato sulla barra verticale: la barra si riempie dal basso in
+/// proporzione al valore tra `min` e `max`, espressi nell'unita' del sensore.
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct BarConfig {
+    pub entity_id: String,
+    #[serde(default)]
+    pub min: f64,
+    pub max: f64,
 }
 
 fn default_brightness() -> u8 {

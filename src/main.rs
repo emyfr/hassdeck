@@ -1,5 +1,6 @@
 mod actions;
 mod auth;
+mod bar;
 mod config;
 mod icons;
 mod keymap;
@@ -13,7 +14,7 @@ use mirajazz::{
 };
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
-use tokio::sync::{broadcast, mpsc, RwLock};
+use tokio::sync::{broadcast, mpsc, Notify, RwLock};
 use web::{AppState, KeyEvent};
 
 const QUERY: DeviceQuery = DeviceQuery::new(65440, 1, 0x1500, 0x3003);
@@ -70,6 +71,8 @@ async fn main() -> anyhow::Result<()> {
         icon_cache: icon_cache.clone(),
         ha_client: reqwest::Client::new(),
         auth: auth::Auth::default(),
+        bar_status: Arc::new(RwLock::new(bar::BarStatus::default())),
+        bar_wake: Arc::new(Notify::new()),
     };
 
     let web_addr = {
@@ -101,6 +104,8 @@ async fn main() -> anyhow::Result<()> {
         }
         device.flush().await?;
     }
+
+    tokio::spawn(bar::run(app_state.clone()));
 
     let (tx, mut rx) = mpsc::unbounded_channel();
     KEY_EVENTS.set(tx).ok();

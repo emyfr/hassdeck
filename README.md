@@ -63,8 +63,10 @@ sudo systemctl enable --now hassdeck.service
 
 Poi apri subito `http://<raspberry>:8080/login` e crea la password dell'interfaccia (vedi Sicurezza).
 
-Su un Raspberry Pi con alimentazione al limite la compilazione può causare undervoltage e bloccarlo:
-in quel caso compila con `cargo build --release -j 1`.
+Usa un alimentatore adeguato, idealmente quello ufficiale da 27 W per il Raspberry Pi 5: il deck è
+alimentato dalla USB del Raspberry e, con molti schermi accesi, un alimentatore al limite può far cadere
+rete e USB. Con alimentazione al limite anche la compilazione può causare undervoltage e bloccare il
+Raspberry: in quel caso compila con `cargo build --release -j 1`.
 
 Il file di unit in `systemd/hassdeck.service` assume che il progetto sia in
 `/opt/hassdeck` — adatta i percorsi (`WorkingDirectory`, `ExecStart`, `ReadWritePaths`) se diverso.
@@ -73,6 +75,22 @@ Il servizio riparte automaticamente in caso di crash (`Restart=on-failure`) e i 
 ```
 journalctl -u hassdeck.service -f
 ```
+
+## Barra verticale
+
+La barra a destra dei tasti è un display (non è touch) e si può usare come indicatore di livello di un
+sensore di Home Assistant, ad esempio la potenza di ricarica dell'auto: si riempie dal basso verso
+l'alto, dal verde al rosso, in proporzione al valore tra un minimo e un massimo. Si configura da
+`/configura` (card "Barra verticale") oppure in `config.toml`:
+
+```toml
+[bar]
+entity_id = "sensor.potenza_wallbox"
+min = 0.0
+max = 2500.0   # nell'unità del sensore (es. W o kW)
+```
+
+Il valore viene letto ogni 2 secondi; se il sensore non è disponibile la barra diventa grigia.
 
 ## Aggiornamento
 

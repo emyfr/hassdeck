@@ -7,6 +7,10 @@
 //! in basso. L'indice riportato in lettura (pressione tasto) è sempre
 //! l'indice di scrittura + 1.
 
+/// Indici logici di scrittura delle tre zone della barra verticale,
+/// dall'alto in basso.
+pub const BAR_WRITE_INDICES: [u8; 3] = [15, 16, 17];
+
 /// Indice logico (0-17) da usare per scrivere l'icona del tasto fisico `physical_key` (1-15).
 pub fn write_index_for_physical_key(physical_key: u8) -> u8 {
     let idx0 = physical_key - 1;

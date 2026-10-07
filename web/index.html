@@ -19,6 +19,7 @@
     --key-on: #ffd54a;
     --key-on-text: #3a2c00;
     --bar-off: #d6d6da;
+    --bar-unavailable: #a8a8ae;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -34,6 +35,7 @@
       --key-on: #ffd54a;
       --key-on-text: #3a2c00;
       --bar-off: #303136;
+      --bar-unavailable: #55565c;
     }
   }
   * { box-sizing: border-box; }
@@ -143,15 +145,30 @@
     box-shadow: 0 0 0 3px var(--err);
   }
   .bar {
-    width: 22px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .bar-segment {
-    flex: 1;
+    position: relative;
+    width: 28px;
     border-radius: 6px;
+    overflow: hidden;
     background: var(--bar-off);
+    text-decoration: none;
+  }
+  .bar.unavailable { background: var(--bar-unavailable); }
+  /* Gradiente sull'intera altezza, ritagliato dall'alto in base al livello:
+     cosi' il colore dipende dall'altezza, come sul deck. */
+  .bar-fill {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(to top, #00c846, #ffd200, #e61e1e);
+    clip-path: inset(100% 0 0 0);
+    transition: clip-path 400ms ease;
+  }
+  /* Le fasce nere tra le tre zone del deck. */
+  .bar-gap {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 6px;
+    background: var(--card-bg);
   }
   .deck-caption {
     text-align: center;
@@ -196,13 +213,14 @@
   <div class="card">
     <div class="deck">
       <div class="keys-grid" id="keys-grid"></div>
-      <div class="bar">
-        <div class="bar-segment"></div>
-        <div class="bar-segment"></div>
-        <div class="bar-segment"></div>
-      </div>
+      <a class="bar" id="bar" href="/configura#barra" title="Configura la barra">
+        <div class="bar-fill" id="bar-fill"></div>
+        <div class="bar-gap" style="top: calc(33.33% - 3px)"></div>
+        <div class="bar-gap" style="top: calc(66.67% - 3px)"></div>
+      </a>
     </div>
-    <div class="deck-caption">clicca un tasto per attivarlo da qui — barra verticale solo display, non interattiva</div>
+    <div class="deck-caption">clicca un tasto per attivarlo da qui</div>
+    <div class="deck-caption" id="bar-caption">barra: non configurata</div>
   </div>
 
   <footer id="ws-status">connessione in corso…</footer>
@@ -242,6 +260,37 @@ async function pressKeyFromWeb(key) {
     // il server aggiornera' comunque lo stato al prossimo refresh
   } finally {
     el.classList.remove("pending");
+  }
+}
+
+const barEl = document.getElementById("bar");
+const barFillEl = document.getElementById("bar-fill");
+const barCaptionEl = document.getElementById("bar-caption");
+
+function formatValue(value, unit) {
+  const rounded = Math.abs(value) >= 100 ? Math.round(value) : Math.round(value * 10) / 10;
+  return rounded.toLocaleString("it-IT") + (unit ? " " + unit : "");
+}
+
+function renderBar(status) {
+  const level = status.level;
+  barFillEl.style.clipPath = `inset(${100 - (level ?? 0) * 100}% 0 0 0)`;
+  barEl.classList.toggle("unavailable", !!status.entity_id && level == null);
+  if (!status.entity_id) {
+    barCaptionEl.textContent = "barra: non configurata";
+  } else if (level == null) {
+    barCaptionEl.textContent = `barra: ${status.entity_id} non disponibile` + (status.error ? ` (${status.error})` : "");
+  } else {
+    barCaptionEl.textContent = `barra: ${formatValue(status.value, status.unit)} (${Math.round(level * 100)}%)`;
+  }
+}
+
+async function refreshBar() {
+  try {
+    const res = await fetch("/api/bar");
+    renderBar((await res.json()).status);
+  } catch (e) {
+    // aggiornata comunque dagli eventi WebSocket
   }
 }
 
@@ -302,6 +351,7 @@ async function refreshStatus() {
 
 refreshStatus();
 refreshIcons();
+refreshBar();
 setInterval(refreshStatus, 3000);
 setInterval(refreshIcons, 5000);
 
@@ -322,6 +372,10 @@ function connectWs() {
 
   ws.onmessage = (msg) => {
     const event = JSON.parse(msg.data);
+    if (event.type === "bar") {
+      renderBar(event);
+      return;
+    }
     const el = keyEls[event.physical_key];
     if (!el) return;
 

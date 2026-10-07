@@ -13,11 +13,12 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, Notify, RwLock};
 
 use crate::actions;
 use crate::auth::{self, Auth};
-use crate::config::{self, Action, Config, HomeAssistantConfig};
+use crate::bar::{BarStatus, SharedBarStatus};
+use crate::config::{self, Action, BarConfig, Config, HomeAssistantConfig};
 use crate::icons::{self, IconCache};
 use mirajazz::device::Device;
 
@@ -47,12 +48,13 @@ pub type SharedStatus = Arc<RwLock<Status>>;
 pub type SharedConfig = Arc<RwLock<Config>>;
 
 /// Evento in tempo reale inoltrato ai client connessi via WebSocket, usato
-/// per animare la griglia dei tasti nella pagina di monitoraggio.
+/// per animare la griglia dei tasti e la barra nella pagina di monitoraggio.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum KeyEvent {
     Key { physical_key: u8, pressed: bool },
     ActionResult { physical_key: u8, success: bool },
+    Bar(BarStatus),
 }
 
 #[derive(Clone)]
@@ -66,6 +68,9 @@ pub struct AppState {
     pub icon_cache: IconCache,
     pub ha_client: reqwest::Client,
     pub auth: Auth,
+    pub bar_status: SharedBarStatus,
+    /// Sveglia il task della barra quando la sua configurazione cambia.
+    pub bar_wake: Arc<Notify>,
 }
 
 /// Durata (ms) del lampeggio "premuto" mostrato quando il tasto viene
@@ -408,6 +413,59 @@ async fn set_home_assistant_settings(
 }
 
 #[derive(Debug, Serialize)]
+struct BarView {
+    config: Option<BarConfig>,
+    status: BarStatus,
+}
+
+async fn bar_view(state: &AppState) -> BarView {
+    BarView {
+        config: state.config.read().await.bar.clone(),
+        status: state.bar_status.read().await.clone(),
+    }
+}
+
+async fn get_bar_handler(State(state): State<AppState>) -> Json<BarView> {
+    Json(bar_view(&state).await)
+}
+
+async fn set_bar_handler(
+    State(state): State<AppState>,
+    Json(mut body): Json<BarConfig>,
+) -> Result<Json<BarView>, (StatusCode, String)> {
+    body.entity_id = body.entity_id.trim().to_string();
+    if !body.entity_id.contains('.') {
+        return Err(bad_request("entity_id non valido (es. sensor.potenza)"));
+    }
+    if !body.min.is_finite() || !body.max.is_finite() {
+        return Err(bad_request("min e max devono essere numeri"));
+    }
+    if body.max <= body.min {
+        return Err(bad_request("max deve essere maggiore di min"));
+    }
+
+    {
+        let mut config = state.config.write().await;
+        config.bar = Some(body);
+        config::save(&config, &state.config_path).map_err(internal_err)?;
+    }
+    state.bar_wake.notify_one();
+    Ok(Json(bar_view(&state).await))
+}
+
+async fn clear_bar_handler(
+    State(state): State<AppState>,
+) -> Result<Json<BarView>, (StatusCode, String)> {
+    {
+        let mut config = state.config.write().await;
+        config.bar = None;
+        config::save(&config, &state.config_path).map_err(internal_err)?;
+    }
+    state.bar_wake.notify_one();
+    Ok(Json(bar_view(&state).await))
+}
+
+#[derive(Debug, Serialize)]
 struct TestConnectionResult {
     success: bool,
     message: String,
@@ -510,6 +568,10 @@ fn router(state: AppState) -> Router {
         .route(
             "/api/home_assistant/services",
             get(list_home_assistant_services),
+        )
+        .route(
+            "/api/bar",
+            get(get_bar_handler).put(set_bar_handler).delete(clear_bar_handler),
         )
         .route("/api/auth/logout", axum::routing::post(auth::logout_handler))
         .route(

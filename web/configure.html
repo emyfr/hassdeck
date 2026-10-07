@@ -147,7 +147,7 @@
   }
   .entity-combo-option:hover, .entity-combo-option.active { background: var(--input-bg); }
   .entity-combo-empty { padding: 0.45rem 0.6rem; font-size: 0.85rem; color: var(--muted); }
-  input[type="text"], select {
+  input[type="text"], input[type="number"], select {
     background: var(--input-bg);
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -178,6 +178,10 @@
   .status-line.ok { color: var(--ok); }
   .status-line.err { color: var(--err); }
   .hint { color: var(--muted); font-size: 0.78rem; }
+  .bar-badge { height: 72px; width: 18px; background: linear-gradient(to top, #00c846, #ffd200, #e61e1e); }
+  .bar-title { font-weight: 700; }
+  .bar-range label { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; color: var(--muted); }
+  .bar-range input { width: 110px; }
 </style>
 </head>
 <body>
@@ -192,6 +196,23 @@
   </nav>
   <p class="hint">Carica un'icona per tasto (viene scritta subito sul deck) e imposta l'azione da eseguire al rilascio: una chiamata a un servizio Home Assistant, oppure una richiesta HTTP a un URL qualsiasi. Le modifiche si salvano subito in config.toml.</p>
   <p class="hint status-line err" id="entities-hint" style="display:none;"></p>
+
+  <div class="key-card" id="barra">
+    <div class="key-badge bar-badge"></div>
+    <div class="key-body">
+      <div class="bar-title">Barra verticale</div>
+      <p class="hint" style="margin:0;">Indicatore di livello: la barra si riempie dal basso verso l'alto (verde, giallo, rosso) in proporzione al valore del sensore tra minimo e massimo, espressi nell'unità del sensore. Aggiornata ogni 2 secondi; grigia se il sensore non è disponibile.</p>
+      <div class="action-row" id="bar-entity-row"></div>
+      <div class="action-row bar-range">
+        <label>Minimo <input type="number" step="any" id="bar-min" value="0"></label>
+        <label>Massimo <input type="number" step="any" id="bar-max"></label>
+        <span class="hint" id="bar-unit"></span>
+        <button id="bar-save-btn">Salva barra</button>
+        <button class="secondary" id="bar-clear-btn">Disattiva</button>
+      </div>
+      <div class="status-line" id="bar-status"></div>
+    </div>
+  </div>
 
   <div id="keys-container"></div>
 </main>
@@ -221,6 +242,8 @@ const ACTIONABLE_DOMAINS = new Set([
 ]);
 
 let ENTITIES = [];
+// Sensori numerici (con unità di misura), proposti per la barra verticale.
+let SENSORS = [];
 let entitiesError = null;
 
 async function loadEntities() {
@@ -229,10 +252,12 @@ async function loadEntities() {
     if (!res.ok) throw new Error(await res.text());
     const all = await res.json();
     ENTITIES = all.filter((e) => ACTIONABLE_DOMAINS.has(entityDomain(e.entity_id)));
+    SENSORS = all.filter((e) => entityDomain(e.entity_id) === "sensor" && e.unit_of_measurement);
     entitiesError = null;
   } catch (err) {
     entitiesError = err.message;
     ENTITIES = [];
+    SENSORS = [];
   }
 }
 
@@ -242,9 +267,9 @@ function escapeHtml(text) {
   }[c]));
 }
 
-function entityLabel(entityId) {
+function entityLabel(entityId, list = ENTITIES) {
   if (!entityId) return "";
-  const e = ENTITIES.find((x) => x.entity_id === entityId);
+  const e = list.find((x) => x.entity_id === entityId);
   if (!e) return entityId;
   return e.friendly_name ? `${e.friendly_name} (${e.entity_id})` : e.entity_id;
 }
@@ -275,27 +300,27 @@ function entityDomain(entityId) {
 
 const ENTITY_COMBO_MAX_RESULTS = 100;
 
-function entityFieldMarkup(currentValue) {
+function entityFieldMarkup(currentValue, list = ENTITIES, example = "light.soggiorno") {
   if (entitiesError) {
-    return `<input type="text" class="entity-input" placeholder="entity_id (es. light.soggiorno)" value="${escapeHtml(currentValue)}">`;
+    return `<input type="text" class="entity-input" placeholder="entity_id (es. ${example})" value="${escapeHtml(currentValue)}">`;
   }
   return `
     <div class="entity-combo">
-      <input type="text" class="entity-combo-input" autocomplete="off" placeholder="cerca entità o digita un entity_id…" value="${escapeHtml(entityLabel(currentValue))}">
+      <input type="text" class="entity-combo-input" autocomplete="off" placeholder="cerca entità o digita un entity_id…" value="${escapeHtml(entityLabel(currentValue, list))}">
       <input type="hidden" class="entity-value" value="${escapeHtml(currentValue)}">
       <div class="entity-combo-dropdown"></div>
     </div>
   `;
 }
 
-function setupEntityCombo(combo, onChange) {
+function setupEntityCombo(combo, onChange, list = ENTITIES) {
   const input = combo.querySelector(".entity-combo-input");
   const hidden = combo.querySelector(".entity-value");
   const dropdown = combo.querySelector(".entity-combo-dropdown");
 
   function renderOptions(filter) {
     const q = filter.trim().toLowerCase();
-    const matches = ENTITIES.filter((e) => {
+    const matches = list.filter((e) => {
       const haystack = (e.friendly_name || "") + " " + e.entity_id;
       return haystack.toLowerCase().includes(q);
     }).slice(0, ENTITY_COMBO_MAX_RESULTS);
@@ -316,7 +341,7 @@ function setupEntityCombo(combo, onChange) {
       opt.addEventListener("mousedown", (ev) => {
         ev.preventDefault(); // evita che il blur si attivi prima del click sull'opzione
         hidden.value = opt.dataset.id;
-        input.value = entityLabel(opt.dataset.id);
+        input.value = entityLabel(opt.dataset.id, list);
         dropdown.classList.remove("open");
         if (onChange) onChange();
       });
@@ -332,11 +357,11 @@ function setupEntityCombo(combo, onChange) {
   input.addEventListener("blur", () => {
     setTimeout(() => {
       const typed = input.value.trim();
-      if (typed !== entityLabel(hidden.value)) {
+      if (typed !== entityLabel(hidden.value, list)) {
         // Non corrisponde a una selezione dalla tendina: trattalo come
         // entity_id inserito a mano (fallback per entità non elencate).
         hidden.value = typed;
-        input.value = entityLabel(typed) || typed;
+        input.value = entityLabel(typed, list) || typed;
       }
       dropdown.classList.remove("open");
       if (onChange) onChange();
@@ -567,7 +592,89 @@ async function loadKeys() {
   });
 }
 
-loadKeys();
+function formatValue(value, unit) {
+  const rounded = Math.abs(value) >= 100 ? Math.round(value) : Math.round(value * 10) / 10;
+  return rounded.toLocaleString("it-IT") + (unit ? " " + unit : "");
+}
+
+function setBarStatus(text, cls = "") {
+  const el = document.getElementById("bar-status");
+  el.textContent = text;
+  el.className = "status-line" + (cls ? " " + cls : "");
+}
+
+function barStatusText(status) {
+  if (!status.entity_id) return "barra non configurata";
+  if (status.level == null) return "sensore non disponibile" + (status.error ? ": " + status.error : "");
+  return `valore attuale ${formatValue(status.value, status.unit)} (${Math.round(status.level * 100)}%)`;
+}
+
+function barEntityId() {
+  const hidden = document.querySelector("#bar-entity-row .entity-value");
+  if (hidden) return hidden.value.trim();
+  const fallback = document.querySelector("#bar-entity-row .entity-input");
+  return fallback ? fallback.value.trim() : "";
+}
+
+function refreshBarUnit() {
+  const sensor = SENSORS.find((e) => e.entity_id === barEntityId());
+  document.getElementById("bar-unit").textContent = sensor ? sensor.unit_of_measurement : "";
+}
+
+async function refreshBarStatus() {
+  const res = await fetch("/api/bar");
+  const view = await res.json();
+  setBarStatus(barStatusText(view.status), view.status.entity_id && view.status.level == null ? "err" : "");
+  return view;
+}
+
+async function loadBar() {
+  const view = await refreshBarStatus();
+  const config = view.config || { entity_id: "", min: 0, max: "" };
+  const row = document.getElementById("bar-entity-row");
+  row.innerHTML = entityFieldMarkup(config.entity_id, SENSORS, "sensor.potenza");
+  const combo = row.querySelector(".entity-combo");
+  if (combo) setupEntityCombo(combo, refreshBarUnit, SENSORS);
+  document.getElementById("bar-min").value = config.min;
+  document.getElementById("bar-max").value = config.max;
+  refreshBarUnit();
+}
+
+document.getElementById("bar-save-btn").addEventListener("click", async () => {
+  const entity_id = barEntityId();
+  const min = parseFloat(document.getElementById("bar-min").value);
+  const max = parseFloat(document.getElementById("bar-max").value);
+  if (!entity_id) return setBarStatus("scegli un sensore", "err");
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return setBarStatus("inserisci minimo e massimo", "err");
+  if (max <= min) return setBarStatus("il massimo deve essere maggiore del minimo", "err");
+
+  setBarStatus("salvataggio…");
+  try {
+    const res = await fetch("/api/bar", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ entity_id, min, max }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    setBarStatus("barra salvata", "ok");
+    // Il deck si aggiorna subito: dopo un attimo mostra il valore letto.
+    setTimeout(refreshBarStatus, 1500);
+  } catch (err) {
+    setBarStatus("errore: " + err.message, "err");
+  }
+});
+
+document.getElementById("bar-clear-btn").addEventListener("click", async () => {
+  try {
+    const res = await fetch("/api/bar", { method: "DELETE" });
+    if (!res.ok) throw new Error(await res.text());
+    setBarStatus("barra disattivata", "ok");
+  } catch (err) {
+    setBarStatus("errore: " + err.message, "err");
+  }
+});
+
+loadKeys().then(loadBar);
 </script>
 </body>
 </html>

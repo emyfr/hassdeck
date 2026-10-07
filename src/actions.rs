@@ -5,6 +5,18 @@ use serde::Serialize;
 pub struct EntitySummary {
     pub entity_id: String,
     pub friendly_name: Option<String>,
+    /// Presente per i sensori numerici, usato dall'editor per proporre i
+    /// sensori adatti alla barra verticale.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unit_of_measurement: Option<String>,
+}
+
+/// Stato corrente di un'entita' (`state` e' sempre una stringa, anche per i
+/// sensori numerici, e puo' valere "unavailable" o "unknown").
+#[derive(Debug, Clone)]
+pub struct EntityState {
+    pub state: String,
+    pub unit: Option<String>,
 }
 
 fn build_home_assistant_client(ha: &HomeAssistantConfig) -> anyhow::Result<reqwest::Client> {
@@ -78,14 +90,17 @@ pub async fn list_entities(ha: &HomeAssistantConfig) -> anyhow::Result<Vec<Entit
         .into_iter()
         .filter_map(|state| {
             let entity_id = state.get("entity_id")?.as_str()?.to_string();
-            let friendly_name = state
-                .get("attributes")
-                .and_then(|a| a.get("friendly_name"))
-                .and_then(|n| n.as_str())
-                .map(str::to_string);
+            let attribute = |name: &str| {
+                state
+                    .get("attributes")
+                    .and_then(|a| a.get(name))
+                    .and_then(|n| n.as_str())
+                    .map(str::to_string)
+            };
             Some(EntitySummary {
                 entity_id,
-                friendly_name,
+                friendly_name: attribute("friendly_name"),
+                unit_of_measurement: attribute("unit_of_measurement"),
             })
         })
         .collect();
@@ -93,6 +108,50 @@ pub async fn list_entities(ha: &HomeAssistantConfig) -> anyhow::Result<Vec<Entit
     entities.sort_by(|a, b| a.entity_id.cmp(&b.entity_id));
 
     Ok(entities)
+}
+
+/// Legge lo stato di una singola entita' (`GET /api/states/<entity_id>`).
+pub async fn get_state(ha: &HomeAssistantConfig, entity_id: &str) -> anyhow::Result<EntityState> {
+    if ha.url.trim().is_empty() || ha.token.trim().is_empty() {
+        anyhow::bail!("url o token Home Assistant non impostati (vedi /impostazioni)");
+    }
+
+    let client = build_home_assistant_client(ha)?;
+    let url = format!("{}/api/states/{entity_id}", ha.url.trim_end_matches('/'));
+
+    let response = client
+        .get(&url)
+        .bearer_auth(&ha.token)
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("impossibile contattare {url}: {e}"))?;
+
+    let status = response.status();
+    if status == reqwest::StatusCode::NOT_FOUND {
+        anyhow::bail!("entita' {entity_id} non trovata in Home Assistant");
+    }
+    if !status.is_success() {
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("Home Assistant ha risposto {status}: {body}");
+    }
+
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|e| anyhow::anyhow!("risposta di Home Assistant non valida: {e}"))?;
+
+    Ok(EntityState {
+        state: body
+            .get("state")
+            .and_then(|s| s.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        unit: body
+            .get("attributes")
+            .and_then(|a| a.get("unit_of_measurement"))
+            .and_then(|u| u.as_str())
+            .map(str::to_string),
+    })
 }
 
 #[derive(Debug, Serialize, Clone)]
