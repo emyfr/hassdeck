@@ -362,7 +362,8 @@ async function refreshIcons() {
       // Il valore arriva via WebSocket: qui si toglie solo il dato di
       // sistema da un tasto che non lo mostra piu'.
       if (!k.action || k.action.type !== "system") el.classList.remove("has-system");
-      el.classList.toggle("protected", !!k.protected);
+      // Sui tasti luce la protezione non si applica (vedi main.rs).
+      el.classList.toggle("protected", !!k.protected && !(k.action && k.action.type === "light"));
       if (k.icon) {
         el.style.backgroundImage = `url(/${k.icon}?t=${Date.now()})`;
         el.classList.add("has-icon");

@@ -99,16 +99,27 @@ pub struct KeyConfig {
 /// primo tipo implementato; altri tipi (webhook, comando shell locale) si
 /// aggiungono come nuove varianti, vedi ANALYSIS.md. `System` non esegue
 /// nulla alla pressione: il tasto mostra un dato di sistema (vedi `system.rs`).
+/// `Light` accende o spegne la luce con una pressione rapida e ne aumenta la
+/// luminosita' di `step_pct` a intervalli finche' il tasto resta premuto.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Action {
     HomeAssistant { service: String, entity_id: String },
+    Light {
+        entity_id: String,
+        #[serde(default = "default_light_step_pct")]
+        step_pct: u8,
+    },
     Url {
         url: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         method: Option<String>,
     },
     System { metric: String },
+}
+
+fn default_light_step_pct() -> u8 {
+    10
 }
 
 pub fn load(path: &Path) -> anyhow::Result<Config> {

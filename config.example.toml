@@ -21,3 +21,10 @@ action = { type = "home_assistant", service = "light.toggle", entity_id = "light
 key = 2
 icon = "icons/scene.png"
 action = { type = "home_assistant", service = "scene.turn_on", entity_id = "scene.movie_night" }
+
+# Pressione rapida: accende/spegne. Tenuto premuto: la luminosita' cambia di
+# step_pct punti ogni 0,4 secondi fino al rilascio, salendo e scendendo a
+# pressioni alterne.
+[[keys]]
+key = 11
+action = { type = "light", entity_id = "light.soggiorno", step_pct = 10 }

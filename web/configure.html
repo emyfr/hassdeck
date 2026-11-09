@@ -181,6 +181,9 @@
   .key-side { flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 0.5rem; }
   .protect-toggle { display: flex; flex-direction: column; align-items: center; gap: 0.15rem; font-size: 0.68rem; color: var(--muted); cursor: pointer; text-align: center; width: 64px; }
   .protect-toggle input { width: 18px; height: 18px; margin: 0; cursor: pointer; accent-color: var(--accent); }
+  .protect-toggle:has(input:disabled) { opacity: 0.4; cursor: default; }
+  .light-fields label { display: flex; align-items: center; gap: 0.3rem; font-size: 0.85rem; color: var(--muted); white-space: nowrap; }
+  .light-fields .step-input { flex: 0 0 64px; width: 64px; }
   .bar-badge { height: 72px; width: 18px; background: linear-gradient(to top, #00c846, #ffd200, #e61e1e); }
   .bar-title { font-weight: 700; }
   .bar-range label { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; color: var(--muted); }
@@ -197,7 +200,7 @@
       <a href="#" id="logout-link">Esci</a>
     </div>
   </nav>
-  <p class="hint">Carica un'icona per tasto (viene scritta subito sul deck) e imposta l'azione da eseguire al rilascio: una chiamata a un servizio Home Assistant, oppure una richiesta HTTP a un URL qualsiasi. In alternativa il tasto può mostrare un dato di sistema del Raspberry (CPU, temperatura, tensione…) al posto dell'icona. Le modifiche si salvano subito in config.toml.</p>
+  <p class="hint">Carica un'icona per tasto (viene scritta subito sul deck) e imposta l'azione da eseguire al rilascio: una chiamata a un servizio Home Assistant, oppure una richiesta HTTP a un URL qualsiasi. Il tipo "Luce" accende o spegne una luce con una pressione rapida e, tenendo premuto, ne regola la luminosità a passi finché non rilasci: una pressione prolungata alza, la successiva abbassa. In alternativa il tasto può mostrare un dato di sistema del Raspberry (CPU, temperatura, tensione…) al posto dell'icona. Le modifiche si salvano subito in config.toml.</p>
   <p class="hint status-line err" id="entities-hint" style="display:none;"></p>
 
   <div class="key-card" id="barra">
@@ -245,6 +248,8 @@ const ACTIONABLE_DOMAINS = new Set([
 ]);
 
 let ENTITIES = [];
+// Luci, proposte per l'azione "Luce".
+let LIGHTS = [];
 // Sensori numerici (con unità di misura), proposti per la barra verticale.
 let SENSORS = [];
 let entitiesError = null;
@@ -256,11 +261,13 @@ async function loadEntities() {
     const all = await res.json();
     ENTITIES = all.filter((e) => ACTIONABLE_DOMAINS.has(entityDomain(e.entity_id)));
     SENSORS = all.filter((e) => entityDomain(e.entity_id) === "sensor" && e.unit_of_measurement);
+    LIGHTS = all.filter((e) => entityDomain(e.entity_id) === "light");
     entitiesError = null;
   } catch (err) {
     entitiesError = err.message;
     ENTITIES = [];
     SENSORS = [];
+    LIGHTS = [];
   }
 }
 
@@ -442,6 +449,17 @@ function iconPreviewMarkup(icon) {
 
 const HTTP_METHODS = ["POST", "GET", "PUT", "PATCH", "DELETE"];
 
+const PROTECT_TITLE = "Se attivo, un tocco non fa nulla: serve tenere premuto il tasto per 2 secondi";
+const PROTECT_LIGHT_TITLE = "Non disponibile per le luci: la pressione prolungata regola la luminosità";
+
+// entity_id scelto nel campo entità dentro `scope` (tendina o testo libero).
+function entityValueIn(scope) {
+  const hidden = scope.querySelector(".entity-value");
+  if (hidden) return hidden.value.trim();
+  const fallback = scope.querySelector(".entity-input");
+  return fallback ? fallback.value.trim() : "";
+}
+
 function metricOptionsMarkup(current) {
   const known = METRICS.some((m) => m.id === current);
   let options = METRICS
@@ -458,15 +476,16 @@ function keyCardMarkup(k) {
   const type = action.type || "home_assistant";
   const isUrl = type === "url";
   const isSystem = type === "system";
-  const isHa = !isUrl && !isSystem;
+  const isLight = type === "light";
+  const isHa = !isUrl && !isSystem && !isLight;
   const method = action.method || "POST";
 
   return `
     <div class="key-card" data-key="${k.key}">
       <div class="key-side">
         <div class="key-badge">${k.key}</div>
-        <label class="protect-toggle" title="Se attivo, un tocco non fa nulla: serve tenere premuto il tasto per 2 secondi">
-          <input type="checkbox" class="protect-input" ${k.protected ? "checked" : ""}>
+        <label class="protect-toggle" title="${isLight ? PROTECT_LIGHT_TITLE : PROTECT_TITLE}">
+          <input type="checkbox" class="protect-input" ${k.protected ? "checked" : ""} ${isLight ? "disabled" : ""}>
           protetto
         </label>
       </div>
@@ -478,12 +497,18 @@ function keyCardMarkup(k) {
         <div class="action-row">
           <select class="action-type">
             <option value="home_assistant" ${isHa ? "selected" : ""}>Home Assistant</option>
+            <option value="light" ${isLight ? "selected" : ""}>Luce</option>
             <option value="url" ${isUrl ? "selected" : ""}>Chiamata URL</option>
             <option value="system" ${isSystem ? "selected" : ""}>Dato di sistema</option>
           </select>
           <div class="action-fields ha-fields" style="display:${isHa ? "flex" : "none"}">
-            ${entityFieldMarkup(action.entity_id || '')}
-            ${serviceFieldMarkup(action.service || '', action.entity_id || '')}
+            ${entityFieldMarkup(isHa ? action.entity_id || '' : '')}
+            ${serviceFieldMarkup(action.service || '', isHa ? action.entity_id || '' : '')}
+          </div>
+          <div class="action-fields light-fields" style="display:${isLight ? "flex" : "none"}">
+            ${entityFieldMarkup(isLight ? action.entity_id : "", LIGHTS)}
+            <label title="Variazione di luminosità a ogni passo mentre tieni premuto il tasto">passo
+              <input type="number" class="step-input" min="1" max="100" value="${action.step_pct || 10}">%</label>
           </div>
           <div class="action-fields url-fields" style="display:${isUrl ? "flex" : "none"}">
             <input type="text" class="url-input" placeholder="https://esempio.local/webhook" value="${action.url || ''}">
@@ -569,11 +594,11 @@ async function loadKeys() {
 
     const serviceSelect = card.querySelector(".service-select");
 
+    const haFields = card.querySelector(".ha-fields");
+    const lightFields = card.querySelector(".light-fields");
+
     function currentEntityId() {
-      const hidden = card.querySelector(".entity-value");
-      if (hidden) return hidden.value.trim();
-      const fallback = card.querySelector(".entity-input");
-      return fallback ? fallback.value.trim() : "";
+      return entityValueIn(haFields);
     }
 
     function refreshServiceSelect() {
@@ -585,13 +610,22 @@ async function loadKeys() {
       if (!sameDomain) serviceSelect.dataset.initialService = "";
     }
 
-    const entityCombo = card.querySelector(".entity-combo");
+    const entityCombo = haFields.querySelector(".entity-combo");
     if (entityCombo) setupEntityCombo(entityCombo, refreshServiceSelect);
     refreshServiceSelect();
 
+    const lightCombo = lightFields.querySelector(".entity-combo");
+    if (lightCombo) setupEntityCombo(lightCombo, null, LIGHTS);
+
     card.querySelector(".action-type").addEventListener("change", (e) => {
       const type = e.target.value;
-      card.querySelector(".ha-fields").style.display = type === "home_assistant" ? "flex" : "none";
+      haFields.style.display = type === "home_assistant" ? "flex" : "none";
+      lightFields.style.display = type === "light" ? "flex" : "none";
+      // Per le luci la pressione prolungata regola la luminosita': la
+      // protezione non si applica (il deck la ignora).
+      const protectInput = card.querySelector(".protect-input");
+      protectInput.disabled = type === "light";
+      protectInput.closest(".protect-toggle").title = type === "light" ? PROTECT_LIGHT_TITLE : PROTECT_TITLE;
       card.querySelector(".url-fields").style.display = type === "url" ? "flex" : "none";
       card.querySelector(".system-fields").style.display = type === "system" ? "flex" : "none";
     });
@@ -601,10 +635,7 @@ async function loadKeys() {
       let body;
 
       if (type === "home_assistant") {
-        const entityValueEl = card.querySelector(".entity-value");
-        const entityId = entityValueEl
-          ? entityValueEl.value.trim()
-          : card.querySelector(".entity-input").value.trim();
+        const entityId = currentEntityId();
 
         let service;
         if (serviceSelect) {
@@ -621,6 +652,20 @@ async function loadKeys() {
           return;
         }
         body = { type: "home_assistant", service, entity_id: entityId };
+      } else if (type === "light") {
+        const entityId = entityValueIn(lightFields);
+        const stepPct = parseInt(card.querySelector(".step-input").value, 10);
+        if (!entityId) {
+          statusEl.textContent = "scegli una luce";
+          statusEl.className = "status-line err";
+          return;
+        }
+        if (!(stepPct >= 1 && stepPct <= 100)) {
+          statusEl.textContent = "il passo deve essere tra 1 e 100";
+          statusEl.className = "status-line err";
+          return;
+        }
+        body = { type: "light", entity_id: entityId, step_pct: stepPct };
       } else if (type === "system") {
         const metric = card.querySelector(".metric-input").value;
         if (!metric) {

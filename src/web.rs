@@ -19,6 +19,7 @@ use crate::actions;
 use crate::auth::{self, Auth};
 use crate::bar::{BarStatus, SharedBarStatus};
 use crate::config::{self, Action, BarConfig, Config, HomeAssistantConfig};
+use crate::hold::{self, HoldTracker, LightDirections};
 use crate::icons::{self, IconCache};
 use crate::system;
 use mirajazz::device::Device;
@@ -138,7 +139,68 @@ pub async fn run_key_action(state: &AppState, physical_key: u8) {
 
     println!("Tasto {physical_key} premuto: eseguo azione");
     let result = actions::execute(&state.ha_client, &ha, &action).await;
+    record_action_result(state, physical_key, result).await;
+}
 
+/// Regola la luminosita' della luce associata al tasto finche' la pressione
+/// `id` resta in corso: un passo ogni `hold::LIGHT_STEP_INTERVAL`, salendo o
+/// scendendo secondo `directions`, e si ferma arrivati al 100% o allo 0%, al
+/// rilascio o al primo errore di Home Assistant.
+pub async fn run_light_hold(
+    state: &AppState,
+    physical_key: u8,
+    holds: &HoldTracker,
+    id: u64,
+    directions: &LightDirections,
+) {
+    let (action, ha) = {
+        let config = state.config.read().await;
+        let action = config
+            .keys
+            .iter()
+            .find(|k| k.key == physical_key)
+            .and_then(|k| k.action.clone());
+        (action, config.home_assistant.clone())
+    };
+
+    let Some(Action::Light { entity_id, step_pct }) = action else {
+        return;
+    };
+
+    let brightness = match actions::get_state(&ha, &entity_id).await {
+        Ok(light) if light.state == "on" => light.brightness,
+        Ok(_) => None,
+        Err(e) => {
+            record_action_result(state, physical_key, Err(e)).await;
+            return;
+        }
+    };
+    let up = directions.next(physical_key, brightness).await;
+    let steps = hold::light_steps(brightness, up, step_pct);
+    let step = if up { step_pct as i8 } else { -(step_pct as i8) };
+    println!(
+        "Tasto {physical_key} tenuto premuto: luminosita' {} fino a {steps} passi",
+        if up { "in salita" } else { "in discesa" }
+    );
+
+    for n in 0..steps {
+        if n > 0 {
+            tokio::time::sleep(hold::LIGHT_STEP_INTERVAL).await;
+            if !holds.is_held(physical_key, id).await {
+                break;
+            }
+        }
+        let result = actions::light_brightness_step(&ha, &entity_id, step).await;
+        let success = result.is_ok();
+        record_action_result(state, physical_key, result).await;
+        if !success {
+            break;
+        }
+    }
+}
+
+/// Registra l'esito di un'azione nello stato e lo inoltra ai client web.
+async fn record_action_result(state: &AppState, physical_key: u8, result: anyhow::Result<()>) {
     let (success, message) = match &result {
         Ok(()) => (true, "OK".to_string()),
         Err(e) => (false, e.to_string()),
@@ -300,6 +362,14 @@ fn validate_action(action: &Action) -> Result<(), (StatusCode, String)> {
             }
             if entity_id.trim().is_empty() {
                 return Err(bad_request("il campo 'entity_id' non puo' essere vuoto"));
+            }
+        }
+        Action::Light { entity_id, step_pct } => {
+            if !entity_id.starts_with("light.") {
+                return Err(bad_request("entity_id deve essere una luce (es. light.soggiorno)"));
+            }
+            if !(1..=100).contains(step_pct) {
+                return Err(bad_request("il passo di luminosita' deve essere tra 1 e 100"));
             }
         }
         Action::Url { url, method } => {

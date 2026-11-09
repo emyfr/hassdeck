@@ -129,6 +129,8 @@ async fn main() -> anyhow::Result<()> {
     println!("In ascolto. Premi un tasto sul deck per eseguire l'azione configurata.");
 
     let holds = hold::HoldTracker::default();
+    let light_holds = hold::HoldTracker::default();
+    let light_directions = hold::LightDirections::default();
 
     while let Some((read_index, state)) = rx.recv().await {
         let Some(physical_key) = keymap::physical_key_for_read_index(read_index) else {
@@ -145,11 +147,30 @@ async fn main() -> anyhow::Result<()> {
             // Mostra subito la variante scurita, se il tasto ha un'icona.
             show_key_icon(&app_state, physical_key, true).await;
 
-            let protected = {
+            // Un tasto luce usa gia' la pressione prolungata per la
+            // luminosita', quindi la protezione non si applica.
+            let (light, protected) = {
                 let config = config.read().await;
-                config.keys.iter().any(|k| k.key == physical_key && k.protected)
+                let key_config = config.keys.iter().find(|k| k.key == physical_key);
+                let light = key_config
+                    .is_some_and(|k| matches!(k.action, Some(config::Action::Light { .. })));
+                (light, !light && key_config.is_some_and(|k| k.protected))
             };
-            if protected {
+            if light {
+                // Se il tasto e' ancora premuto dopo LIGHT_LONG_PRESS la
+                // luminosita' cambia a passi fino al rilascio; altrimenti il
+                // rilascio esegue l'azione normale (accende o spegne).
+                let id = light_holds.press(physical_key).await;
+                let (light_holds, light_directions, app_state) =
+                    (light_holds.clone(), light_directions.clone(), app_state.clone());
+                tokio::spawn(async move {
+                    tokio::time::sleep(hold::LIGHT_LONG_PRESS).await;
+                    if light_holds.fire_if_held(physical_key, id).await {
+                        web::run_light_hold(&app_state, physical_key, &light_holds, id, &light_directions)
+                            .await;
+                    }
+                });
+            } else if protected {
                 // L'azione parte solo se il tasto e' ancora premuto allo
                 // scadere del tempo, e l'icona torna normale per segnalare
                 // che si puo' rilasciare.
@@ -178,6 +199,13 @@ async fn main() -> anyhow::Result<()> {
                 continue;
             }
             None => {}
+        }
+
+        // Tasto luce tenuto premuto: la luminosita' e' gia' stata regolata.
+        // Rilasciato prima, prosegue come un tasto normale (accende o spegne).
+        if light_holds.release(physical_key).await == Some(true) {
+            show_key_icon(&app_state, physical_key, false).await;
+            continue;
         }
 
         // Ripristina l'icona a riposo, se il tasto ne ha una.

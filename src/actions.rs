@@ -17,6 +17,8 @@ pub struct EntitySummary {
 pub struct EntityState {
     pub state: String,
     pub unit: Option<String>,
+    /// Luminosita' 0-255 delle luci accese che la supportano.
+    pub brightness: Option<u8>,
 }
 
 fn build_home_assistant_client(ha: &HomeAssistantConfig) -> anyhow::Result<reqwest::Client> {
@@ -151,6 +153,11 @@ pub async fn get_state(ha: &HomeAssistantConfig, entity_id: &str) -> anyhow::Res
             .and_then(|a| a.get("unit_of_measurement"))
             .and_then(|u| u.as_str())
             .map(str::to_string),
+        brightness: body
+            .get("attributes")
+            .and_then(|a| a.get("brightness"))
+            .and_then(|b| b.as_u64())
+            .map(|b| b.min(255) as u8),
     })
 }
 
@@ -218,6 +225,54 @@ pub async fn list_services(ha: &HomeAssistantConfig) -> anyhow::Result<Vec<Domai
     Ok(domains)
 }
 
+/// Chiama un servizio Home Assistant (`POST /api/services/<dominio>/<servizio>`)
+/// con il corpo `data`, che contiene almeno `entity_id`.
+async fn call_service(
+    ha: &HomeAssistantConfig,
+    domain: &str,
+    service: &str,
+    data: serde_json::Value,
+) -> anyhow::Result<()> {
+    let url = format!(
+        "{}/api/services/{domain}/{service}",
+        ha.url.trim_end_matches('/')
+    );
+
+    let ha_client = build_home_assistant_client(ha)?;
+    let response = ha_client
+        .post(&url)
+        .bearer_auth(&ha.token)
+        .json(&data)
+        .send()
+        .await?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("Home Assistant ha risposto {status}: {body}");
+    }
+
+    Ok(())
+}
+
+/// Varia la luminosita' di una luce di `step_pct` punti percentuali (negativo
+/// per abbassarla): se la luce e' spenta un passo positivo la accende partendo
+/// dal basso, e arrivando a 0 Home Assistant la spegne. Usata ripetutamente
+/// mentre il tasto di un'azione `Light` resta premuto.
+pub async fn light_brightness_step(
+    ha: &HomeAssistantConfig,
+    entity_id: &str,
+    step_pct: i8,
+) -> anyhow::Result<()> {
+    call_service(
+        ha,
+        "light",
+        "turn_on",
+        serde_json::json!({ "entity_id": entity_id, "brightness_step_pct": step_pct }),
+    )
+    .await
+}
+
 pub async fn execute(
     client: &reqwest::Client,
     ha: &HomeAssistantConfig,
@@ -229,26 +284,13 @@ pub async fn execute(
                 anyhow::anyhow!("service non valido: '{service}' (atteso formato dominio.servizio)")
             })?;
 
-            let url = format!(
-                "{}/api/services/{domain}/{service_name}",
-                ha.url.trim_end_matches('/')
-            );
+            call_service(ha, domain, service_name, serde_json::json!({ "entity_id": entity_id })).await
+        }
 
-            let ha_client = build_home_assistant_client(ha)?;
-            let response = ha_client
-                .post(&url)
-                .bearer_auth(&ha.token)
-                .json(&serde_json::json!({ "entity_id": entity_id }))
-                .send()
-                .await?;
-
-            if !response.status().is_success() {
-                let status = response.status();
-                let body = response.text().await.unwrap_or_default();
-                anyhow::bail!("Home Assistant ha risposto {status}: {body}");
-            }
-
-            Ok(())
+        // Pressione rapida: accende o spegne. La pressione prolungata e'
+        // gestita a parte, vedi `light_brightness_step`.
+        Action::Light { entity_id, .. } => {
+            call_service(ha, "light", "toggle", serde_json::json!({ "entity_id": entity_id })).await
         }
 
         // Il tasto mostra un dato di sistema: nessuna azione alla pressione.
