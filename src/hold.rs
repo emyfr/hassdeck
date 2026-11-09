@@ -106,7 +106,8 @@ pub fn light_steps(brightness: Option<u8>, up: bool, step_pct: u8) -> u32 {
     remaining.div_ceil(u32::from(step_pct.max(1))).max(1)
 }
 
-fn brightness_pct(brightness: u8) -> u32 {
+/// Luminosita' 0-255 di Home Assistant espressa in percentuale.
+pub fn brightness_pct(brightness: u8) -> u32 {
     (u32::from(brightness) * 100 + 127) / 255
 }
 

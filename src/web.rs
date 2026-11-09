@@ -114,6 +114,31 @@ async fn flash_key_icon(state: &AppState, physical_key: u8) {
     }
 }
 
+/// Mostra la variante premuta o a riposo dell'icona del tasto, se ne ha una.
+pub async fn show_key_icon(state: &AppState, physical_key: u8, pressed: bool) {
+    if let Some(icons) = state.icon_cache.read().await.get(&physical_key) {
+        let image = if pressed { icons.pressed.clone() } else { icons.normal.clone() };
+        let _ = icons::write_icon_to_device(&state.device, physical_key, image).await;
+    }
+}
+
+/// Mostra sul tasto il livello di luminosita' (0-100) come riempimento dal
+/// basso, sotto l'icona del tasto.
+async fn show_light_level(state: &AppState, physical_key: u8, level_pct: u32) {
+    let image = icons::level_image(state.icon_cache.read().await.get(&physical_key), level_pct);
+    let _ = icons::write_icon_to_device(&state.device, physical_key, image).await;
+}
+
+/// Toglie il riempimento della luminosita': rimette l'icona a riposo, o il
+/// solo sfondo se il tasto non ha un'icona.
+pub async fn clear_light_level(state: &AppState, physical_key: u8) {
+    let image = match state.icon_cache.read().await.get(&physical_key) {
+        Some(icons) => icons.normal.clone(),
+        None => icons::level_image(None, 0),
+    };
+    let _ = icons::write_icon_to_device(&state.device, physical_key, image).await;
+}
+
 /// Esegue l'azione configurata per un tasto e registra l'esito, sia che
 /// l'attivazione provenga da una pressione fisica sia da un click web.
 pub async fn run_key_action(state: &AppState, physical_key: u8) {
@@ -145,7 +170,8 @@ pub async fn run_key_action(state: &AppState, physical_key: u8) {
 /// Regola la luminosita' della luce associata al tasto finche' la pressione
 /// `id` resta in corso: un passo ogni `hold::LIGHT_STEP_INTERVAL`, salendo o
 /// scendendo secondo `directions`, e si ferma arrivati al 100% o allo 0%, al
-/// rilascio o al primo errore di Home Assistant.
+/// rilascio o al primo errore di Home Assistant. Intanto il tasto si riempie
+/// dal basso in proporzione alla luminosita'.
 pub async fn run_light_hold(
     state: &AppState,
     physical_key: u8,
@@ -178,6 +204,9 @@ pub async fn run_light_hold(
     let up = directions.next(physical_key, brightness).await;
     let steps = hold::light_steps(brightness, up, step_pct);
     let step = if up { step_pct as i8 } else { -(step_pct as i8) };
+    // Livello stimato dai passi inviati, senza rileggere lo stato ogni volta.
+    let mut level = brightness.map_or(0, hold::brightness_pct);
+    show_light_level(state, physical_key, level).await;
     println!(
         "Tasto {physical_key} tenuto premuto: luminosita' {} fino a {steps} passi",
         if up { "in salita" } else { "in discesa" }
@@ -196,6 +225,20 @@ pub async fn run_light_hold(
         if !success {
             break;
         }
+        level = if up {
+            (level + u32::from(step_pct)).min(100)
+        } else {
+            level.saturating_sub(u32::from(step_pct))
+        };
+        if holds.is_held(physical_key, id).await {
+            show_light_level(state, physical_key, level).await;
+        }
+    }
+
+    // Se il tasto e' stato rilasciato mentre si scriveva il livello, il
+    // ripristino fatto al rilascio potrebbe essere stato sovrascritto.
+    if !holds.is_held(physical_key, id).await {
+        clear_light_level(state, physical_key).await;
     }
 }
 

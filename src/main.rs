@@ -145,7 +145,7 @@ async fn main() -> anyhow::Result<()> {
 
         if pressed {
             // Mostra subito la variante scurita, se il tasto ha un'icona.
-            show_key_icon(&app_state, physical_key, true).await;
+            web::show_key_icon(&app_state, physical_key, true).await;
 
             // Un tasto luce usa gia' la pressione prolungata per la
             // luminosita', quindi la protezione non si applica.
@@ -179,7 +179,7 @@ async fn main() -> anyhow::Result<()> {
                 tokio::spawn(async move {
                     tokio::time::sleep(hold::HOLD_DURATION).await;
                     if holds.fire_if_held(physical_key, id).await {
-                        show_key_icon(&app_state, physical_key, false).await;
+                        web::show_key_icon(&app_state, physical_key, false).await;
                         web::run_key_action(&app_state, physical_key).await;
                     }
                 });
@@ -193,7 +193,7 @@ async fn main() -> anyhow::Result<()> {
             // Tasto protetto tenuto abbastanza: l'azione e' gia' partita.
             Some(true) => continue,
             Some(false) => {
-                show_key_icon(&app_state, physical_key, false).await;
+                web::show_key_icon(&app_state, physical_key, false).await;
                 println!("Tasto {physical_key} protetto rilasciato troppo presto: nessuna azione");
                 let _ = events_tx.send(KeyEvent::HoldRequired { physical_key });
                 continue;
@@ -204,12 +204,12 @@ async fn main() -> anyhow::Result<()> {
         // Tasto luce tenuto premuto: la luminosita' e' gia' stata regolata.
         // Rilasciato prima, prosegue come un tasto normale (accende o spegne).
         if light_holds.release(physical_key).await == Some(true) {
-            show_key_icon(&app_state, physical_key, false).await;
+            web::clear_light_level(&app_state, physical_key).await;
             continue;
         }
 
         // Ripristina l'icona a riposo, se il tasto ne ha una.
-        show_key_icon(&app_state, physical_key, false).await;
+        web::show_key_icon(&app_state, physical_key, false).await;
 
         // Stessa funzione usata quando il tasto viene attivato da web, cosi'
         // il comportamento (esecuzione azione, stato, evento) e' identico.
@@ -220,12 +220,4 @@ async fn main() -> anyhow::Result<()> {
     device.shutdown().await?;
 
     Ok(())
-}
-
-/// Mostra la variante premuta o a riposo dell'icona del tasto, se ne ha una.
-async fn show_key_icon(state: &AppState, physical_key: u8, pressed: bool) {
-    if let Some(icons) = state.icon_cache.read().await.get(&physical_key) {
-        let image = if pressed { icons.pressed.clone() } else { icons.normal.clone() };
-        let _ = icons::write_icon_to_device(&state.device, physical_key, image).await;
-    }
 }
