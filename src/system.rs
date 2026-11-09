@@ -198,8 +198,8 @@ fn format_value(info: &MetricInfo, value: Option<f64>) -> String {
 }
 
 /// Riporta il tasto alla sua icona configurata (o lo spegne) quando smette
-/// di mostrare un dato di sistema.
-async fn restore_key(state: &AppState, key: u8) {
+/// di mostrare un dato di sistema (o il livello di una luce, vedi `lights.rs`).
+pub async fn restore_key(state: &AppState, key: u8) {
     let icon = {
         let config = state.config.read().await;
         config.keys.iter().find(|k| k.key == key).and_then(|k| k.icon.clone())

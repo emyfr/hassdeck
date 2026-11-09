@@ -101,8 +101,10 @@ Un tasto con l'azione "Luce" accende o spegne una luce di Home Assistant con una
 `brightness_step_pct`). Le pressioni prolungate si alternano: una alza e la successiva abbassa. Se la
 luce è spenta la pressione prolungata la accende salendo dal basso, se è al massimo la abbassa; arrivando
 a 0% Home Assistant la spegne. Le luci solo on/off rispondono soltanto alla pressione rapida.
-Mentre la luminosità cambia, lo sfondo del tasto si riempie dal basso in proporzione al livello, sotto
-l'icona; per questo conviene un'icona PNG con sfondo trasparente. Al rilascio torna l'icona normale.
+Lo sfondo del tasto resta riempito dal basso in proporzione alla luminosità attuale, sotto l'icona (per
+questo conviene un'icona PNG con sfondo trasparente): si aggiorna a ogni passo mentre la regoli e, ogni 2
+secondi, segue anche le modifiche fatte da Home Assistant o da altri interruttori. A luce spenta il tasto
+mostra solo l'icona.
 Si configura da `/configura` con il tipo "Luce" oppure in `config.toml`:
 
 ```toml

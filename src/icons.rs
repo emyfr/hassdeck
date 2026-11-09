@@ -50,7 +50,7 @@ pub struct KeyIcons {
     pub normal: DynamicImage,
     pub pressed: DynamicImage,
     /// Icona ridimensionata con la trasparenza originale, disegnata sopra il
-    /// riempimento di `level_image`.
+    /// riempimento di `level_icons`.
     pub overlay: RgbaImage,
 }
 
@@ -76,10 +76,20 @@ pub fn prepare_key_icons(image: DynamicImage) -> KeyIcons {
     KeyIcons { normal, pressed, overlay }
 }
 
+/// Varianti di un tasto luce: sfondo riempito dal basso per `level_pct`
+/// (0-100) con sopra `overlay`, l'icona del tasto con la sua trasparenza
+/// (`None` se il tasto non ha un'icona).
+pub fn level_icons(overlay: Option<&RgbaImage>, level_pct: u32) -> KeyIcons {
+    let (w, h) = image_format().size;
+    let overlay = overlay.cloned().unwrap_or_else(|| RgbaImage::new(w as u32, h as u32));
+    let normal = DynamicImage::ImageRgb8(level_image(Some(&overlay), level_pct).to_rgb8());
+    let pressed = tint(&normal, PRESSED_TINT_COLOR, PRESSED_TINT_ALPHA);
+    KeyIcons { normal, pressed, overlay }
+}
+
 /// Tasto riempito dal basso per `level_pct` (0-100) della sua altezza, con
-/// sopra l'icona del tasto se ne ha una: mostrato mentre si regola la
-/// luminosita' di una luce.
-pub fn level_image(icons: Option<&KeyIcons>, level_pct: u32) -> DynamicImage {
+/// sopra `overlay` se presente.
+fn level_image(overlay: Option<&RgbaImage>, level_pct: u32) -> DynamicImage {
     let (w, h) = image_format().size;
     let (w, h) = (w as u32, h as u32);
     let fill_from = h - h * level_pct.min(100) / 100;
@@ -87,8 +97,8 @@ pub fn level_image(icons: Option<&KeyIcons>, level_pct: u32) -> DynamicImage {
         let [r, g, b] = if y >= fill_from { LEVEL_FILL } else { LEVEL_BACKGROUND };
         Rgba([r, g, b, 255])
     });
-    if let Some(icons) = icons {
-        image::imageops::overlay(&mut image, &icons.overlay, 0, 0);
+    if let Some(overlay) = overlay {
+        image::imageops::overlay(&mut image, overlay, 0, 0);
     }
     DynamicImage::ImageRgba8(image)
 }
@@ -105,6 +115,12 @@ mod tests {
         assert_eq!(image.get_pixel(0, h - 1).0[..3], LEVEL_FILL);
         assert_eq!(image.get_pixel(0, h / 2 - 1).0[..3], LEVEL_BACKGROUND);
         assert_eq!(image.get_pixel(0, h / 2 + 1).0[..3], LEVEL_FILL);
+    }
+
+    #[test]
+    fn level_icons_without_icon_show_only_the_fill() {
+        let icons = level_icons(None, 100);
+        assert_eq!(icons.normal.to_rgb8().get_pixel(0, 0).0, LEVEL_FILL);
     }
 
     #[test]

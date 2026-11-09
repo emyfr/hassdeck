@@ -21,6 +21,7 @@ use crate::bar::{BarStatus, SharedBarStatus};
 use crate::config::{self, Action, BarConfig, Config, HomeAssistantConfig};
 use crate::hold::{self, HoldTracker, LightDirections};
 use crate::icons::{self, IconCache};
+use crate::lights::{self, AdjustingLights};
 use crate::system;
 use mirajazz::device::Device;
 
@@ -83,6 +84,9 @@ pub struct AppState {
     pub bar_wake: Arc<Notify>,
     /// Sveglia il task dei dati di sistema quando cambia l'azione di un tasto.
     pub system_wake: Arc<Notify>,
+    /// Sveglia il task dei tasti luce per rileggere subito lo stato delle luci.
+    pub light_wake: Arc<Notify>,
+    pub adjusting_lights: AdjustingLights,
 }
 
 /// Durata (ms) del lampeggio "premuto" mostrato quando il tasto viene
@@ -122,23 +126,6 @@ pub async fn show_key_icon(state: &AppState, physical_key: u8, pressed: bool) {
     }
 }
 
-/// Mostra sul tasto il livello di luminosita' (0-100) come riempimento dal
-/// basso, sotto l'icona del tasto.
-async fn show_light_level(state: &AppState, physical_key: u8, level_pct: u32) {
-    let image = icons::level_image(state.icon_cache.read().await.get(&physical_key), level_pct);
-    let _ = icons::write_icon_to_device(&state.device, physical_key, image).await;
-}
-
-/// Toglie il riempimento della luminosita': rimette l'icona a riposo, o il
-/// solo sfondo se il tasto non ha un'icona.
-pub async fn clear_light_level(state: &AppState, physical_key: u8) {
-    let image = match state.icon_cache.read().await.get(&physical_key) {
-        Some(icons) => icons.normal.clone(),
-        None => icons::level_image(None, 0),
-    };
-    let _ = icons::write_icon_to_device(&state.device, physical_key, image).await;
-}
-
 /// Esegue l'azione configurata per un tasto e registra l'esito, sia che
 /// l'attivazione provenga da una pressione fisica sia da un click web.
 pub async fn run_key_action(state: &AppState, physical_key: u8) {
@@ -165,13 +152,18 @@ pub async fn run_key_action(state: &AppState, physical_key: u8) {
     println!("Tasto {physical_key} premuto: eseguo azione");
     let result = actions::execute(&state.ha_client, &ha, &action).await;
     record_action_result(state, physical_key, result).await;
+
+    // La luce e' stata accesa o spenta: il tasto mostra subito il nuovo livello.
+    if matches!(action, Action::Light { .. }) {
+        state.light_wake.notify_one();
+    }
 }
 
 /// Regola la luminosita' della luce associata al tasto finche' la pressione
 /// `id` resta in corso: un passo ogni `hold::LIGHT_STEP_INTERVAL`, salendo o
 /// scendendo secondo `directions`, e si ferma arrivati al 100% o allo 0%, al
 /// rilascio o al primo errore di Home Assistant. Intanto il tasto si riempie
-/// dal basso in proporzione alla luminosita'.
+/// dal basso in proporzione alla luminosita' (vedi `lights.rs`).
 pub async fn run_light_hold(
     state: &AppState,
     physical_key: u8,
@@ -193,7 +185,26 @@ pub async fn run_light_hold(
         return;
     };
 
-    let brightness = match actions::get_state(&ha, &entity_id).await {
+    state.adjusting_lights.lock().await.insert(physical_key);
+    adjust_light(state, physical_key, holds, id, directions, &ha, &entity_id, step_pct).await;
+    state.adjusting_lights.lock().await.remove(&physical_key);
+    // Riallinea il tasto allo stato letto da Home Assistant.
+    state.light_wake.notify_one();
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn adjust_light(
+    state: &AppState,
+    physical_key: u8,
+    holds: &HoldTracker,
+    id: u64,
+    directions: &LightDirections,
+    ha: &HomeAssistantConfig,
+    entity_id: &str,
+    step_pct: u8,
+) {
+
+    let brightness = match actions::get_state(ha, entity_id).await {
         Ok(light) if light.state == "on" => light.brightness,
         Ok(_) => None,
         Err(e) => {
@@ -206,7 +217,7 @@ pub async fn run_light_hold(
     let step = if up { step_pct as i8 } else { -(step_pct as i8) };
     // Livello stimato dai passi inviati, senza rileggere lo stato ogni volta.
     let mut level = brightness.map_or(0, hold::brightness_pct);
-    show_light_level(state, physical_key, level).await;
+    lights::show_level(state, physical_key, level).await;
     println!(
         "Tasto {physical_key} tenuto premuto: luminosita' {} fino a {steps} passi",
         if up { "in salita" } else { "in discesa" }
@@ -219,7 +230,7 @@ pub async fn run_light_hold(
                 break;
             }
         }
-        let result = actions::light_brightness_step(&ha, &entity_id, step).await;
+        let result = actions::light_brightness_step(ha, entity_id, step).await;
         let success = result.is_ok();
         record_action_result(state, physical_key, result).await;
         if !success {
@@ -230,15 +241,7 @@ pub async fn run_light_hold(
         } else {
             level.saturating_sub(u32::from(step_pct))
         };
-        if holds.is_held(physical_key, id).await {
-            show_light_level(state, physical_key, level).await;
-        }
-    }
-
-    // Se il tasto e' stato rilasciato mentre si scriveva il livello, il
-    // ripristino fatto al rilascio potrebbe essere stato sovrascritto.
-    if !holds.is_held(physical_key, id).await {
-        clear_light_level(state, physical_key).await;
+        lights::show_level(state, physical_key, level).await;
     }
 }
 
@@ -387,6 +390,8 @@ async fn upload_icon_handler(
         .await
         .map_err(internal_err)?;
     state.icon_cache.write().await.insert(key, key_icons);
+    // Un tasto luce ridisegna il livello sotto la nuova icona.
+    state.light_wake.notify_one();
 
     let mut config = state.config.write().await;
     config::set_key_icon(&mut config, key, icon_rel_path);
@@ -452,6 +457,7 @@ async fn set_action_handler(
     config::set_key_action(&mut config, key, action);
     config::save(&config, &state.config_path).map_err(internal_err)?;
     state.system_wake.notify_one();
+    state.light_wake.notify_one();
 
     Ok(Json(key_config_view(&config, key)))
 }
@@ -497,6 +503,7 @@ async fn clear_action_handler(
     config::clear_key_action(&mut config, key);
     config::save(&config, &state.config_path).map_err(internal_err)?;
     state.system_wake.notify_one();
+    state.light_wake.notify_one();
 
     Ok(Json(key_config_view(&config, key)))
 }

@@ -5,6 +5,7 @@ mod config;
 mod hold;
 mod icons;
 mod keymap;
+mod lights;
 mod system;
 mod web;
 
@@ -76,6 +77,8 @@ async fn main() -> anyhow::Result<()> {
         bar_status: Arc::new(RwLock::new(bar::BarStatus::default())),
         bar_wake: Arc::new(Notify::new()),
         system_wake: Arc::new(Notify::new()),
+        light_wake: Arc::new(Notify::new()),
+        adjusting_lights: Default::default(),
     };
 
     let web_addr = {
@@ -110,6 +113,7 @@ async fn main() -> anyhow::Result<()> {
 
     tokio::spawn(bar::run(app_state.clone()));
     tokio::spawn(system::run(app_state.clone()));
+    tokio::spawn(lights::run(app_state.clone()));
 
     let (tx, mut rx) = mpsc::unbounded_channel();
     KEY_EVENTS.set(tx).ok();
@@ -204,7 +208,7 @@ async fn main() -> anyhow::Result<()> {
         // Tasto luce tenuto premuto: la luminosita' e' gia' stata regolata.
         // Rilasciato prima, prosegue come un tasto normale (accende o spegne).
         if light_holds.release(physical_key).await == Some(true) {
-            web::clear_light_level(&app_state, physical_key).await;
+            web::show_key_icon(&app_state, physical_key, false).await;
             continue;
         }
 
