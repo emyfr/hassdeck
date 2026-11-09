@@ -178,6 +178,9 @@
   .status-line.ok { color: var(--ok); }
   .status-line.err { color: var(--err); }
   .hint { color: var(--muted); font-size: 0.78rem; }
+  .key-side { flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 0.5rem; }
+  .protect-toggle { display: flex; flex-direction: column; align-items: center; gap: 0.15rem; font-size: 0.68rem; color: var(--muted); cursor: pointer; text-align: center; width: 64px; }
+  .protect-toggle input { width: 18px; height: 18px; margin: 0; cursor: pointer; accent-color: var(--accent); }
   .bar-badge { height: 72px; width: 18px; background: linear-gradient(to top, #00c846, #ffd200, #e61e1e); }
   .bar-title { font-weight: 700; }
   .bar-range label { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; color: var(--muted); }
@@ -460,7 +463,13 @@ function keyCardMarkup(k) {
 
   return `
     <div class="key-card" data-key="${k.key}">
-      <div class="key-badge">${k.key}</div>
+      <div class="key-side">
+        <div class="key-badge">${k.key}</div>
+        <label class="protect-toggle" title="Se attivo, un tocco non fa nulla: serve tenere premuto il tasto per 2 secondi">
+          <input type="checkbox" class="protect-input" ${k.protected ? "checked" : ""}>
+          protetto
+        </label>
+      </div>
       <div class="key-body">
         <div class="icon-row">
           ${iconPreviewMarkup(k.icon)}
@@ -537,6 +546,26 @@ async function loadKeys() {
     const statusEl = card.querySelector(".status-line");
 
     attachIconHandler(card, key, statusEl);
+
+    card.querySelector(".protect-input").addEventListener("change", async (e) => {
+      const protectedKey = e.target.checked;
+      try {
+        const res = await fetch(`/api/keys/${key}/protected`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ protected: protectedKey }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        statusEl.textContent = protectedKey
+          ? "tasto protetto: tieni premuto 2 secondi per eseguire l'azione"
+          : "protezione disattivata";
+        statusEl.className = "status-line ok";
+      } catch (err) {
+        e.target.checked = !protectedKey;
+        statusEl.textContent = "errore: " + err.message;
+        statusEl.className = "status-line err";
+      }
+    });
 
     const serviceSelect = card.querySelector(".service-select");
 

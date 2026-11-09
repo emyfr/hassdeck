@@ -89,6 +89,10 @@ pub struct KeyConfig {
     pub icon: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<Action>,
+    /// Tasto protetto da pressioni accidentali: l'azione parte solo tenendolo
+    /// premuto per `hold::HOLD_DURATION`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub protected: bool,
 }
 
 /// Tipo di azione eseguita alla pressione di un tasto. Home Assistant è il
@@ -132,6 +136,7 @@ pub fn set_key_icon(config: &mut Config, key: u8, icon: String) {
             key,
             icon: Some(icon),
             action: None,
+            protected: false,
         });
     }
 }
@@ -145,6 +150,21 @@ pub fn set_key_action(config: &mut Config, key: u8, action: Action) {
             key,
             icon: None,
             action: Some(action),
+            protected: false,
+        });
+    }
+}
+
+/// Attiva o disattiva la protezione di un tasto, creando la voce se non esiste.
+pub fn set_key_protected(config: &mut Config, key: u8, protected: bool) {
+    if let Some(kc) = config.keys.iter_mut().find(|kc| kc.key == key) {
+        kc.protected = protected;
+    } else if protected {
+        config.keys.push(KeyConfig {
+            key,
+            icon: None,
+            action: None,
+            protected,
         });
     }
 }

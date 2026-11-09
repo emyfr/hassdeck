@@ -8,7 +8,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -55,6 +55,8 @@ pub type SharedConfig = Arc<RwLock<Config>>;
 pub enum KeyEvent {
     Key { physical_key: u8, pressed: bool },
     ActionResult { physical_key: u8, success: bool },
+    /// Tasto protetto rilasciato prima di `hold::HOLD_DURATION`: nessuna azione.
+    HoldRequired { physical_key: u8 },
     Bar(BarStatus),
     System {
         physical_key: u8,
@@ -223,6 +225,7 @@ struct KeyConfigView {
     key: u8,
     icon: Option<String>,
     action: Option<Action>,
+    protected: bool,
 }
 
 fn key_config_view(config: &Config, key: u8) -> KeyConfigView {
@@ -231,6 +234,7 @@ fn key_config_view(config: &Config, key: u8) -> KeyConfigView {
         key,
         icon: existing.and_then(|kc| kc.icon.clone()),
         action: existing.and_then(|kc| kc.action.clone()),
+        protected: existing.is_some_and(|kc| kc.protected),
     }
 }
 
@@ -335,6 +339,25 @@ async fn set_action_handler(
     config::set_key_action(&mut config, key, action);
     config::save(&config, &state.config_path).map_err(internal_err)?;
     state.system_wake.notify_one();
+
+    Ok(Json(key_config_view(&config, key)))
+}
+
+#[derive(Debug, Deserialize)]
+struct ProtectedBody {
+    protected: bool,
+}
+
+async fn set_protected_handler(
+    State(state): State<AppState>,
+    AxumPath(key): AxumPath<u8>,
+    Json(body): Json<ProtectedBody>,
+) -> Result<Json<KeyConfigView>, (StatusCode, String)> {
+    check_key_range(key)?;
+
+    let mut config = state.config.write().await;
+    config::set_key_protected(&mut config, key, body.protected);
+    config::save(&config, &state.config_path).map_err(internal_err)?;
 
     Ok(Json(key_config_view(&config, key)))
 }
@@ -568,6 +591,10 @@ fn router(state: AppState) -> Router {
         .route(
             "/api/keys/{key}/action",
             axum::routing::put(set_action_handler).delete(clear_action_handler),
+        )
+        .route(
+            "/api/keys/{key}/protected",
+            axum::routing::put(set_protected_handler),
         )
         .route(
             "/api/keys/{key}/press",

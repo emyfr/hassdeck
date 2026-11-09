@@ -2,6 +2,7 @@ mod actions;
 mod auth;
 mod bar;
 mod config;
+mod hold;
 mod icons;
 mod keymap;
 mod system;
@@ -127,6 +128,8 @@ async fn main() -> anyhow::Result<()> {
 
     println!("In ascolto. Premi un tasto sul deck per eseguire l'azione configurata.");
 
+    let holds = hold::HoldTracker::default();
+
     while let Some((read_index, state)) = rx.recv().await {
         let Some(physical_key) = keymap::physical_key_for_read_index(read_index) else {
             continue; // barra verticale o indice non riconosciuto
@@ -140,18 +143,45 @@ async fn main() -> anyhow::Result<()> {
 
         if pressed {
             // Mostra subito la variante scurita, se il tasto ha un'icona.
-            if let Some(icons) = icon_cache.read().await.get(&physical_key) {
-                let _ = icons::write_icon_to_device(&device, physical_key, icons.pressed.clone()).await;
+            show_key_icon(&app_state, physical_key, true).await;
+
+            let protected = {
+                let config = config.read().await;
+                config.keys.iter().any(|k| k.key == physical_key && k.protected)
+            };
+            if protected {
+                // L'azione parte solo se il tasto e' ancora premuto allo
+                // scadere del tempo, e l'icona torna normale per segnalare
+                // che si puo' rilasciare.
+                let id = holds.press(physical_key).await;
+                let (holds, app_state) = (holds.clone(), app_state.clone());
+                tokio::spawn(async move {
+                    tokio::time::sleep(hold::HOLD_DURATION).await;
+                    if holds.fire_if_held(physical_key, id).await {
+                        show_key_icon(&app_state, physical_key, false).await;
+                        web::run_key_action(&app_state, physical_key).await;
+                    }
+                });
             }
-            // Esegue l'azione solo al rilascio, per evitare di eseguirla due
-            // volte (una per la pressione, una per il rilascio).
+            // Gli altri tasti eseguono l'azione solo al rilascio, per evitare
+            // di eseguirla due volte (una per la pressione, una per il rilascio).
             continue;
         }
 
-        // Ripristina l'icona a riposo, se il tasto ne ha una.
-        if let Some(icons) = icon_cache.read().await.get(&physical_key) {
-            let _ = icons::write_icon_to_device(&device, physical_key, icons.normal.clone()).await;
+        match holds.release(physical_key).await {
+            // Tasto protetto tenuto abbastanza: l'azione e' gia' partita.
+            Some(true) => continue,
+            Some(false) => {
+                show_key_icon(&app_state, physical_key, false).await;
+                println!("Tasto {physical_key} protetto rilasciato troppo presto: nessuna azione");
+                let _ = events_tx.send(KeyEvent::HoldRequired { physical_key });
+                continue;
+            }
+            None => {}
         }
+
+        // Ripristina l'icona a riposo, se il tasto ne ha una.
+        show_key_icon(&app_state, physical_key, false).await;
 
         // Stessa funzione usata quando il tasto viene attivato da web, cosi'
         // il comportamento (esecuzione azione, stato, evento) e' identico.
@@ -162,4 +192,12 @@ async fn main() -> anyhow::Result<()> {
     device.shutdown().await?;
 
     Ok(())
+}
+
+/// Mostra la variante premuta o a riposo dell'icona del tasto, se ne ha una.
+async fn show_key_icon(state: &AppState, physical_key: u8, pressed: bool) {
+    if let Some(icons) = state.icon_cache.read().await.get(&physical_key) {
+        let image = if pressed { icons.pressed.clone() } else { icons.normal.clone() };
+        let _ = icons::write_icon_to_device(&state.device, physical_key, image).await;
+    }
 }
