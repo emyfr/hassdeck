@@ -520,6 +520,7 @@ function keyCardMarkup(k) {
             <select class="metric-input">${metricOptionsMarkup(action.metric || "")}</select>
           </div>
           <button class="save-action-btn">Salva azione</button>
+          <button class="secondary clear-action-btn">Rimuovi azione</button>
         </div>
         <div class="status-line"></div>
       </div>
@@ -695,6 +696,27 @@ async function loadKeys() {
         });
         if (!res.ok) throw new Error(await res.text());
         statusEl.textContent = "azione salvata";
+        statusEl.className = "status-line ok";
+      } catch (err) {
+        statusEl.textContent = "errore: " + err.message;
+        statusEl.className = "status-line err";
+      }
+    });
+
+    card.querySelector(".clear-action-btn").addEventListener("click", async () => {
+      statusEl.textContent = "rimozione…";
+      statusEl.className = "status-line";
+      try {
+        const res = await fetch(`/api/keys/${key}/action`, { method: "DELETE" });
+        if (!res.ok) throw new Error(await res.text());
+        // Svuota il form: il tasto resta con la sua icona ma non fa piu' nulla.
+        card.querySelectorAll(".entity-value, .entity-combo-input, .entity-input, .service-input, .url-input")
+          .forEach((input) => { input.value = ""; });
+        refreshServiceSelect();
+        const typeSelect = card.querySelector(".action-type");
+        typeSelect.value = "home_assistant";
+        typeSelect.dispatchEvent(new Event("change"));
+        statusEl.textContent = "azione rimossa";
         statusEl.className = "status-line ok";
       } catch (err) {
         statusEl.textContent = "errore: " + err.message;
