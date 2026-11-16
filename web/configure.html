@@ -473,11 +473,13 @@ function metricOptionsMarkup(current) {
 
 function keyCardMarkup(k) {
   const action = k.action || {};
-  const type = action.type || "home_assistant";
+  // Tasto senza azione: nel menu compare "nessuna" (valore vuoto).
+  const type = k.action ? action.type || "home_assistant" : "";
+  const isNone = type === "";
   const isUrl = type === "url";
   const isSystem = type === "system";
   const isLight = type === "light";
-  const isHa = !isUrl && !isSystem && !isLight;
+  const isHa = !isNone && !isUrl && !isSystem && !isLight;
   const method = action.method || "POST";
 
   return `
@@ -496,6 +498,7 @@ function keyCardMarkup(k) {
         </div>
         <div class="action-row">
           <select class="action-type">
+            <option value="" ${isNone ? "selected" : ""}>— nessuna —</option>
             <option value="home_assistant" ${isHa ? "selected" : ""}>Home Assistant</option>
             <option value="light" ${isLight ? "selected" : ""}>Luce</option>
             <option value="url" ${isUrl ? "selected" : ""}>Chiamata URL</option>
@@ -520,7 +523,6 @@ function keyCardMarkup(k) {
             <select class="metric-input">${metricOptionsMarkup(action.metric || "")}</select>
           </div>
           <button class="save-action-btn">Salva azione</button>
-          <button class="secondary clear-action-btn">Rimuovi azione</button>
         </div>
         <div class="status-line"></div>
       </div>
@@ -635,6 +637,22 @@ async function loadKeys() {
       const type = card.querySelector(".action-type").value;
       let body;
 
+      if (type === "") {
+        // "nessuna": toglie l'azione, il tasto torna alla sua icona.
+        statusEl.textContent = "rimozione…";
+        statusEl.className = "status-line";
+        try {
+          const res = await fetch(`/api/keys/${key}/action`, { method: "DELETE" });
+          if (!res.ok) throw new Error(await res.text());
+          statusEl.textContent = "azione rimossa";
+          statusEl.className = "status-line ok";
+        } catch (err) {
+          statusEl.textContent = "errore: " + err.message;
+          statusEl.className = "status-line err";
+        }
+        return;
+      }
+
       if (type === "home_assistant") {
         const entityId = currentEntityId();
 
@@ -696,27 +714,6 @@ async function loadKeys() {
         });
         if (!res.ok) throw new Error(await res.text());
         statusEl.textContent = "azione salvata";
-        statusEl.className = "status-line ok";
-      } catch (err) {
-        statusEl.textContent = "errore: " + err.message;
-        statusEl.className = "status-line err";
-      }
-    });
-
-    card.querySelector(".clear-action-btn").addEventListener("click", async () => {
-      statusEl.textContent = "rimozione…";
-      statusEl.className = "status-line";
-      try {
-        const res = await fetch(`/api/keys/${key}/action`, { method: "DELETE" });
-        if (!res.ok) throw new Error(await res.text());
-        // Svuota il form: il tasto resta con la sua icona ma non fa piu' nulla.
-        card.querySelectorAll(".entity-value, .entity-combo-input, .entity-input, .service-input, .url-input")
-          .forEach((input) => { input.value = ""; });
-        refreshServiceSelect();
-        const typeSelect = card.querySelector(".action-type");
-        typeSelect.value = "home_assistant";
-        typeSelect.dispatchEvent(new Event("change"));
-        statusEl.textContent = "azione rimossa";
         statusEl.className = "status-line ok";
       } catch (err) {
         statusEl.textContent = "errore: " + err.message;
