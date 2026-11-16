@@ -1,7 +1,8 @@
 //! Pulsanti multipli (`[[multi]]` in config): controlli che usano piu' tasti
 //! insieme. Per ora il termostato: un tasto alza e uno abbassa la temperatura
-//! impostata di un'entita' `climate`, ed entrambi la mostrano con una freccia,
-//! riletta da Home Assistant ogni `POLL_INTERVAL`.
+//! impostata di un'entita' `climate`, ed entrambi la mostrano con una freccia
+//! (su sfondo rosso e blu) insieme allo stato della caldaia, riletti da Home
+//! Assistant ogni `POLL_INTERVAL`.
 
 use ab_glyph::FontRef;
 use std::collections::{HashMap, HashSet};
@@ -25,6 +26,13 @@ const SETTLE_DELAY: Duration = Duration::from_millis(1500);
 
 const UP_ARROW: &str = "▲";
 const DOWN_ARROW: &str = "▼";
+
+const UP_BACKGROUND: [u8; 3] = [170, 28, 28];
+const DOWN_BACKGROUND: [u8; 3] = [24, 72, 176];
+const TEXT_COLOR: [u8; 3] = [255, 255, 255];
+/// Stato in basso: giallo mentre l'impianto lavora (caldaia accesa), tenue altrimenti.
+const ACTIVE_COLOR: [u8; 3] = [255, 214, 0];
+const IDLE_COLOR: [u8; 3] = [215, 215, 225];
 
 /// Termostati di cui si sta cambiando la temperatura: la lettura periodica li
 /// salta, per non mostrare un valore di Home Assistant non ancora aggiornato.
@@ -68,7 +76,30 @@ fn format_temperature(value: Option<f64>, step: f64) -> String {
     }
 }
 
-/// Modalita' del termostato, mostrata in basso sul tasto.
+/// Stato mostrato in basso sul tasto, e se l'impianto sta lavorando: cosa fa
+/// la caldaia (`hvac_action`) se il termostato lo riporta, altrimenti la
+/// modalita' impostata.
+#[derive(Debug, Clone, PartialEq)]
+struct ClimateStatus {
+    text: String,
+    active: bool,
+}
+
+fn climate_status(climate: Option<&ClimateState>) -> ClimateStatus {
+    let (text, active) = match climate.and_then(|c| c.action.as_deref()) {
+        Some("heating") | Some("preheating") => ("ACCESA", true),
+        Some("cooling") => ("RAFFRESCA", true),
+        Some("drying") => ("DEUMID.", true),
+        Some("fan") => ("VENTIL.", true),
+        Some("defrosting") => ("SBRINA", true),
+        Some("idle") => ("FERMA", false),
+        Some("off") => ("SPENTO", false),
+        _ => return ClimateStatus { text: mode_label(climate.map_or("", |c| c.state.as_str())), active: false },
+    };
+    ClimateStatus { text: text.to_string(), active }
+}
+
+/// Modalita' del termostato, se non riporta cosa sta facendo l'impianto.
 fn mode_label(state: &str) -> String {
     match state {
         "heat" => "CALDO".to_string(),
@@ -82,16 +113,33 @@ fn mode_label(state: &str) -> String {
     }
 }
 
-/// Disegna sui due tasti del termostato la freccia, `value` e `mode`, e li
+fn key_style(background: [u8; 3], status: &ClimateStatus) -> system::KeyStyle {
+    system::KeyStyle {
+        background,
+        label: TEXT_COLOR,
+        value: TEXT_COLOR,
+        unit: if status.active { ACTIVE_COLOR } else { IDLE_COLOR },
+    }
+}
+
+/// Disegna sui due tasti del termostato la freccia, `value` e lo stato, e li
 /// salva nella cache delle icone, cosi' anche la pressione mostra il valore.
-async fn show_climate(state: &AppState, font: &FontRef<'_>, up_key: u8, down_key: u8, value: &str, mode: &str) {
-    for (key, arrow) in [(up_key, UP_ARROW), (down_key, DOWN_ARROW)] {
-        let key_icons = icons::prepare_key_icons(system::render_metric(font, arrow, value, mode));
+async fn show_climate(
+    state: &AppState,
+    font: &FontRef<'_>,
+    (up_key, down_key): (u8, u8),
+    value: &str,
+    status: &ClimateStatus,
+) {
+    for (key, arrow, background) in [(up_key, UP_ARROW, UP_BACKGROUND), (down_key, DOWN_ARROW, DOWN_BACKGROUND)] {
+        let style = key_style(background, status);
+        let image = system::render_styled(font, arrow, value, &status.text, &style);
+        let key_icons = icons::prepare_key_icons(image);
         if let Err(e) = icons::write_icon_to_device(&state.device, key, key_icons.normal.clone()).await {
             eprintln!("Termostato: errore scrivendo il tasto {key}: {e}");
         }
         state.icon_cache.write().await.insert(key, key_icons);
-        send_event(state, key, arrow, value, mode);
+        send_event(state, key, arrow, value, &status.text);
     }
 }
 
@@ -113,6 +161,9 @@ pub async fn run(state: AppState) {
     let font = font();
     // Contenuto mostrato su ciascun tasto, per evitare riscritture inutili.
     let mut shown: HashMap<u8, String> = HashMap::new();
+    // Riscrive tutti i tasti al prossimo giro. Non si svuota `shown`, che
+    // serve a ripristinare i tasti tolti da un pulsante multiplo.
+    let mut redraw = false;
 
     loop {
         let (groups, ha) = {
@@ -135,22 +186,23 @@ pub async fn run(state: AppState) {
             let climate = actions::get_climate_state(&ha, &entity_id).await.ok();
             let step = effective_step(step, climate.as_ref());
             let value = format_temperature(climate.as_ref().and_then(|c| c.target), step);
-            let mode = mode_label(climate.as_ref().map_or("", |c| c.state.as_str()));
+            let status = climate_status(climate.as_ref());
 
-            let signature = format!("{entity_id}:{value}:{mode}");
-            if shown.get(&up_key) == Some(&signature) && shown.get(&down_key) == Some(&signature) {
-                send_event(&state, up_key, UP_ARROW, &value, &mode);
-                send_event(&state, down_key, DOWN_ARROW, &value, &mode);
+            let signature = format!("{entity_id}:{value}:{}:{}", status.text, status.active);
+            if !redraw && shown.get(&up_key) == Some(&signature) && shown.get(&down_key) == Some(&signature) {
+                send_event(&state, up_key, UP_ARROW, &value, &status.text);
+                send_event(&state, down_key, DOWN_ARROW, &value, &status.text);
                 continue;
             }
-            show_climate(&state, &font, up_key, down_key, &value, &mode).await;
+            show_climate(&state, &font, (up_key, down_key), &value, &status).await;
             shown.insert(up_key, signature.clone());
             shown.insert(down_key, signature);
         }
 
+        redraw = false;
         tokio::select! {
             _ = tokio::time::sleep(POLL_INTERVAL) => {}
-            _ = state.multi_wake.notified() => shown.clear(),
+            _ = state.multi_wake.notified() => redraw = true,
         }
     }
 }
@@ -203,7 +255,7 @@ async fn adjust_climate(
     };
     let up = physical_key == up_key;
     let step = effective_step(configured_step, Some(&climate));
-    let mode = mode_label(&climate.state);
+    let status = climate_status(Some(&climate));
     let font = font();
 
     for n in 0.. {
@@ -227,7 +279,7 @@ async fn adjust_climate(
         target = next;
         println!("Tasto {physical_key}: {entity_id} impostato a {target}");
         let value = format_temperature(Some(target), step);
-        show_climate(state, &font, up_key, down_key, &value, &mode).await;
+        show_climate(state, &font, (up_key, down_key), &value, &status).await;
     }
 }
 
@@ -236,7 +288,26 @@ mod tests {
     use super::*;
 
     fn climate(step: Option<f64>) -> ClimateState {
-        ClimateState { state: "heat".to_string(), target: Some(20.0), step, min: Some(7.0), max: Some(35.0) }
+        ClimateState {
+            state: "heat".to_string(),
+            action: None,
+            target: Some(20.0),
+            step,
+            min: Some(7.0),
+            max: Some(35.0),
+        }
+    }
+
+    #[test]
+    fn status_shows_whether_the_boiler_is_running() {
+        let mut c = climate(None);
+        c.action = Some("heating".to_string());
+        assert_eq!(climate_status(Some(&c)), ClimateStatus { text: "ACCESA".to_string(), active: true });
+        c.action = Some("idle".to_string());
+        assert_eq!(climate_status(Some(&c)), ClimateStatus { text: "FERMA".to_string(), active: false });
+        c.action = None;
+        assert_eq!(climate_status(Some(&c)).text, "CALDO");
+        assert_eq!(climate_status(None).text, "N/D");
     }
 
     #[test]

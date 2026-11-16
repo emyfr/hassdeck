@@ -52,6 +52,9 @@ pub async fn show_level(state: &AppState, key: u8, level_pct: u32) {
 pub async fn run(state: AppState) {
     // Livello mostrato su ciascun tasto, per evitare riscritture inutili.
     let mut shown: HashMap<u8, u32> = HashMap::new();
+    // Riscrive tutti i tasti al prossimo giro. Non si svuota `shown`, che
+    // serve a ripristinare i tasti che non sono piu' luci.
+    let mut redraw = false;
 
     loop {
         let (keys, ha) = {
@@ -82,16 +85,17 @@ pub async fn run(state: AppState) {
                 continue;
             };
             let level = level_from_state(&light);
-            if shown.get(&key) == Some(&level) {
+            if !redraw && shown.get(&key) == Some(&level) {
                 continue;
             }
             show_level(&state, key, level).await;
             shown.insert(key, level);
         }
 
+        redraw = false;
         tokio::select! {
             _ = tokio::time::sleep(POLL_INTERVAL) => {}
-            _ = state.light_wake.notified() => shown.clear(),
+            _ = state.light_wake.notified() => redraw = true,
         }
     }
 }

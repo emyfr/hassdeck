@@ -119,6 +119,9 @@ pub async fn list_entities(ha: &HomeAssistantConfig) -> anyhow::Result<Vec<Entit
 pub struct ClimateState {
     /// Modalita' HVAC (`heat`, `cool`, `off`...) o "unavailable".
     pub state: String,
+    /// Cosa sta facendo l'impianto (`heating`, `idle`, `off`...), se il
+    /// termostato lo riporta.
+    pub action: Option<String>,
     pub target: Option<f64>,
     pub step: Option<f64>,
     pub min: Option<f64>,
@@ -157,6 +160,11 @@ pub async fn get_climate_state(ha: &HomeAssistantConfig, entity_id: &str) -> any
             .and_then(|s| s.as_str())
             .unwrap_or_default()
             .to_string(),
+        action: body
+            .get("attributes")
+            .and_then(|a| a.get("hvac_action"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
         target: attribute("temperature"),
         step: attribute("target_temp_step"),
         min: attribute("min_temp"),

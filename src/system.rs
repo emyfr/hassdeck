@@ -181,14 +181,32 @@ fn draw_centered(img: &mut RgbImage, font: &FontRef, text: &str, size: f32, base
     }
 }
 
-/// Tasto con etichetta in alto, valore al centro e unita' in basso. Usato
-/// anche dai pulsanti multipli (vedi `multi.rs`).
-pub(crate) fn render_metric(font: &FontRef, label: &str, value: &str, unit: &str) -> DynamicImage {
-    let mut img = RgbImage::from_pixel(SIZE, SIZE, Rgb(BACKGROUND));
+/// Tasto con etichetta in alto, valore al centro e unita' in basso.
+fn render_metric(font: &FontRef, label: &str, value: &str, unit: &str) -> DynamicImage {
+    render_styled(font, label, value, unit, &KeyStyle::default())
+}
+
+/// Colori di un tasto disegnato con `render_styled`.
+pub(crate) struct KeyStyle {
+    pub background: [u8; 3],
+    pub label: [u8; 3],
+    pub value: [u8; 3],
+    pub unit: [u8; 3],
+}
+
+impl Default for KeyStyle {
+    fn default() -> Self {
+        Self { background: BACKGROUND, label: LABEL_COLOR, value: VALUE_COLOR, unit: LABEL_COLOR }
+    }
+}
+
+/// Come `render_metric`, con i colori di `style`.
+pub(crate) fn render_styled(font: &FontRef, label: &str, value: &str, unit: &str, style: &KeyStyle) -> DynamicImage {
+    let mut img = RgbImage::from_pixel(SIZE, SIZE, Rgb(style.background));
     let max_width = SIZE as f32 - 8.0;
-    draw_centered(&mut img, font, label, 17.0, 22.0, max_width, LABEL_COLOR);
-    draw_centered(&mut img, font, value, 34.0, 62.0, max_width, VALUE_COLOR);
-    draw_centered(&mut img, font, unit, 17.0, 86.0, max_width, LABEL_COLOR);
+    draw_centered(&mut img, font, label, 17.0, 22.0, max_width, style.label);
+    draw_centered(&mut img, font, value, 34.0, 62.0, max_width, style.value);
+    draw_centered(&mut img, font, unit, 17.0, 86.0, max_width, style.unit);
     DynamicImage::ImageRgb8(img)
 }
 

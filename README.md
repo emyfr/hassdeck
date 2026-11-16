@@ -122,8 +122,11 @@ Un pulsante multiplo usa più tasti insieme per controllare una sola entità. Il
 termostato: un tasto alza e uno abbassa la temperatura impostata di un'entità `climate`
 (`climate.set_temperature`). Un tocco cambia la temperatura di un passo; tenendo premuto, dopo mezzo
 secondo il passo si ripete ogni 0,4 secondi finché non rilasci o non arrivi al minimo o al massimo del
-termostato. Entrambi i tasti mostrano una freccia, la temperatura impostata e la modalità (CALDO,
-FREDDO, AUTO, SPENTO…), aggiornate ogni 2 secondi anche quando la temperatura cambia altrove.
+termostato. Il tasto che alza è rosso e quello che abbassa è blu; entrambi mostrano una freccia, la
+temperatura impostata e in basso cosa sta facendo l'impianto (`hvac_action`): ACCESA, in giallo, mentre
+la caldaia scalda, FERMA quando la temperatura è raggiunta, SPENTO col termostato spento. Se il
+termostato non riporta `hvac_action` compare la modalità (CALDO, AUTO…). Tutto si aggiorna ogni 2
+secondi, anche quando la temperatura cambia altrove.
 Si configura da `/configura` (card "Pulsanti multipli") oppure in `config.toml`:
 
 ```toml
