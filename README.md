@@ -77,6 +77,16 @@ scollegato: appena lo ricolleghi si riconnette da solo. I log sono consultabili 
 journalctl -u hassdeck.service -f
 ```
 
+## Icone
+
+Le icone caricate restano sul Raspberry, nella cartella `icons/`, che fa da libreria: dalla pagina
+`/icone` se ne caricano una o più e si eliminano quelle che nessun tasto usa, mentre in `/configura` il
+pulsante "Libreria" di ogni tasto assegna un'icona già caricata. Anche un'icona caricata direttamente su
+un tasto finisce nella libreria. Il file prende il nome di quello caricato (`Lampada Sala.png` diventa
+`lampada-sala.png`); se il nome è già preso da un'immagine diversa si aggiunge un numero, se l'immagine
+è identica si riusa quella già presente. Scegliendo "— nessuna —" come azione il tasto perde azione e
+icona, ma il file resta nella libreria.
+
 ## Barra verticale
 
 La barra a destra dei tasti è un display (non è touch) e si può usare come indicatore di livello di un

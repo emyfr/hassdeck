@@ -110,6 +110,30 @@
     text-align: center;
   }
   input[type="file"] { font-size: 0.85rem; max-width: 220px; }
+  .icon-slot { display: contents; }
+  .icon-picker {
+    display: none;
+    grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
+    gap: 0.5rem;
+    padding: 0.6rem;
+    background: var(--input-bg);
+    border-radius: 8px;
+    max-height: 220px;
+    overflow-y: auto;
+  }
+  .icon-picker.open { display: grid; }
+  .icon-picker img {
+    width: 52px;
+    height: 52px;
+    border-radius: 6px;
+    object-fit: cover;
+    background: #000;
+    border: 2px solid transparent;
+    cursor: pointer;
+  }
+  .icon-picker img:hover { border-color: var(--muted); }
+  .icon-picker img.current { border-color: var(--accent); }
+  .icon-picker .hint { grid-column: 1 / -1; margin: 0; }
   .action-row {
     display: flex;
     align-items: center;
@@ -202,11 +226,12 @@
     <h1>Configura tasti</h1>
     <div style="display:flex; gap:1rem;">
       <a href="/">Monitor</a>
+      <a href="/icone">Icone</a>
       <a href="/impostazioni">Impostazioni</a>
       <a href="#" id="logout-link">Esci</a>
     </div>
   </nav>
-  <p class="hint">Carica un'icona per tasto (viene scritta subito sul deck) e imposta l'azione da eseguire al rilascio: una chiamata a un servizio Home Assistant, oppure una richiesta HTTP a un URL qualsiasi. Il tipo "Luce" accende o spegne una luce con una pressione rapida e, tenendo premuto, ne regola la luminosità a passi finché non rilasci: una pressione prolungata alza, la successiva abbassa. In alternativa il tasto può mostrare un dato di sistema del Raspberry (CPU, temperatura, tensione…) al posto dell'icona. Le modifiche si salvano subito in config.toml.</p>
+  <p class="hint">Carica un'icona per tasto o sceglila tra quelle già caricate con "Libreria" (viene scritta subito sul deck; le icone si gestiscono nella pagina Icone) e imposta l'azione da eseguire al rilascio: una chiamata a un servizio Home Assistant, oppure una richiesta HTTP a un URL qualsiasi. Il tipo "Luce" accende o spegne una luce con una pressione rapida e, tenendo premuto, ne regola la luminosità a passi finché non rilasci: una pressione prolungata alza, la successiva abbassa. In alternativa il tasto può mostrare un dato di sistema del Raspberry (CPU, temperatura, tensione…) al posto dell'icona. Le modifiche si salvano subito in config.toml.</p>
   <p class="hint status-line err" id="entities-hint" style="display:none;"></p>
 
   <div class="key-card" id="barra">
@@ -518,7 +543,7 @@ function keyCardMarkup(k) {
   const noProtect = isLight || k.multi;
 
   return `
-    <div class="key-card" data-key="${k.key}">
+    <div class="key-card" data-key="${k.key}" data-icon="${escapeHtml(k.icon || "")}">
       <div class="key-side">
         <div class="key-badge">${k.key}</div>
         <label class="protect-toggle" title="${k.multi ? PROTECT_MULTI_TITLE : isLight ? PROTECT_LIGHT_TITLE : PROTECT_TITLE}">
@@ -528,9 +553,11 @@ function keyCardMarkup(k) {
       </div>
       <div class="key-body">
         <div class="icon-row">
-          ${iconPreviewMarkup(k.icon)}
-          <input type="file" accept="image/*" class="icon-input">
+          <span class="icon-slot">${iconPreviewMarkup(k.icon)}</span>
+          <input type="file" accept="image/png,image/jpeg" class="icon-input">
+          <button class="secondary library-btn" type="button">Libreria</button>
         </div>
+        <div class="icon-picker"></div>
         ${multiNote ? `<div class="multi-note">${escapeHtml(multiNote)}</div>` : ""}
         <div class="action-row" style="display:${k.multi ? "none" : "flex"}">
           <select class="action-type">
@@ -566,27 +593,77 @@ function keyCardMarkup(k) {
   `;
 }
 
+// Icone salvate sul server (da /api/icons), assegnabili a qualsiasi tasto.
+let LIBRARY = [];
+
+async function loadLibrary() {
+  try {
+    const res = await fetch("/api/icons");
+    if (res.ok) LIBRARY = await res.json();
+  } catch (err) {
+    LIBRARY = [];
+  }
+}
+
+function setIconPreview(card, icon) {
+  card.querySelector(".icon-slot").innerHTML = iconPreviewMarkup(icon);
+  card.dataset.icon = icon || "";
+}
+
 function attachIconHandler(card, key, statusEl) {
+  const setStatus = (text, cls = "") => {
+    statusEl.textContent = text;
+    statusEl.className = "status-line" + (cls ? " " + cls : "");
+  };
+  const picker = card.querySelector(".icon-picker");
+
   card.querySelector(".icon-input").addEventListener("change", async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    statusEl.textContent = "caricamento…";
-    statusEl.className = "status-line";
+    setStatus("caricamento…");
     const form = new FormData();
     form.append("icon", file);
     try {
       const res = await fetch(`/api/keys/${key}/icon`, { method: "POST", body: form });
       if (!res.ok) throw new Error(await res.text());
-      const updated = await res.json();
-      card.querySelector(".icon-row").innerHTML =
-        iconPreviewMarkup(updated.icon) + '<input type="file" accept="image/*" class="icon-input">';
-      attachIconHandler(card, key, statusEl);
-      statusEl.textContent = "icona caricata e scritta sul deck";
-      statusEl.className = "status-line ok";
+      setIconPreview(card, (await res.json()).icon);
+      picker.classList.remove("open");
+      setStatus("icona caricata nella libreria e scritta sul deck", "ok");
     } catch (err) {
-      statusEl.textContent = "errore: " + err.message;
-      statusEl.className = "status-line err";
+      setStatus("errore: " + err.message, "err");
     }
+    e.target.value = "";
+  });
+
+  card.querySelector(".library-btn").addEventListener("click", async () => {
+    if (picker.classList.toggle("open") === false) return;
+    await loadLibrary();
+    if (!LIBRARY.length) {
+      picker.innerHTML = `<p class="hint">Libreria vuota: carica un'icona qui o dalla pagina <a href="/icone">Icone</a>.</p>`;
+      return;
+    }
+    picker.innerHTML = LIBRARY.map((icon) => `
+      <img src="/${escapeHtml(icon.path)}" title="${escapeHtml(icon.file)}" data-file="${escapeHtml(icon.file)}"
+        class="${icon.path === card.dataset.icon ? "current" : ""}" alt="">
+    `).join("");
+    picker.querySelectorAll("img[data-file]").forEach((img) => {
+      img.addEventListener("click", async () => {
+        setStatus("assegnazione…");
+        try {
+          const res = await fetch(`/api/keys/${key}/icon`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ file: img.dataset.file }),
+          });
+          if (!res.ok) throw new Error(await res.text());
+          setIconPreview(card, (await res.json()).icon);
+          picker.classList.remove("open");
+          setStatus("icona assegnata e scritta sul deck", "ok");
+        } catch (err) {
+          setStatus("errore: " + err.message, "err");
+        }
+      });
+    });
   });
 }
 
@@ -677,13 +754,17 @@ async function loadKeys() {
       let body;
 
       if (type === "") {
-        // "nessuna": toglie l'azione, il tasto torna alla sua icona.
+        // "nessuna": libera il tasto, togliendo icona e azione. Prima l'icona,
+        // cosi' chi smette di disegnare il tasto non la rimette.
         statusEl.textContent = "rimozione…";
         statusEl.className = "status-line";
         try {
-          const res = await fetch(`/api/keys/${key}/action`, { method: "DELETE" });
-          if (!res.ok) throw new Error(await res.text());
-          statusEl.textContent = "azione rimossa";
+          for (const part of ["icon", "action"]) {
+            const res = await fetch(`/api/keys/${key}/${part}`, { method: "DELETE" });
+            if (!res.ok) throw new Error(await res.text());
+          }
+          setIconPreview(card, null);
+          statusEl.textContent = "azione e icona rimosse";
           statusEl.className = "status-line ok";
         } catch (err) {
           statusEl.textContent = "errore: " + err.message;

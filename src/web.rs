@@ -20,6 +20,7 @@ use crate::auth::{self, Auth};
 use crate::bar::{BarStatus, SharedBarStatus};
 use crate::config::{self, Action, BarConfig, Config, HomeAssistantConfig, MultiButton};
 use crate::hold::{self, HoldTracker, LightDirections};
+use crate::icon_library::{self, LibraryIcon};
 use crate::icons::{self, IconCache};
 use crate::lights::{self, AdjustingLights};
 use crate::multi::{self, AdjustingClimates};
@@ -314,6 +315,10 @@ async fn configure_handler() -> Html<&'static str> {
     Html(include_str!("../web/configure.html"))
 }
 
+async fn icons_page_handler() -> Html<&'static str> {
+    Html(include_str!("../web/icons.html"))
+}
+
 async fn settings_handler() -> Html<&'static str> {
     Html(include_str!("../web/settings.html"))
 }
@@ -367,38 +372,30 @@ async fn list_keys_handler(State(state): State<AppState>) -> Json<Vec<KeyConfigV
     Json(views)
 }
 
-async fn upload_icon_handler(
-    State(state): State<AppState>,
-    AxumPath(key): AxumPath<u8>,
-    mut multipart: Multipart,
-) -> Result<Json<KeyConfigView>, (StatusCode, String)> {
-    check_key_range(key)?;
-
-    let mut bytes: Option<Vec<u8>> = None;
-    let mut extension = "png".to_string();
-
+/// File immagine inviati nel campo `icon` di un form multipart, con il nome
+/// originale. Ogni file deve essere un'immagine valida.
+async fn read_icon_uploads(multipart: &mut Multipart) -> Result<Vec<(String, Vec<u8>)>, (StatusCode, String)> {
+    let mut uploads = Vec::new();
     while let Some(field) = multipart.next_field().await.map_err(internal_err)? {
         if field.name() != Some("icon") {
             continue;
         }
-        if let Some(file_name) = field.file_name() {
-            if let Some(ext) = file_name.rsplit('.').next() {
-                extension = ext.to_lowercase();
-            }
-        }
-        bytes = Some(field.bytes().await.map_err(internal_err)?.to_vec());
+        let name = field.file_name().unwrap_or("icona.png").to_string();
+        let bytes = field.bytes().await.map_err(internal_err)?.to_vec();
+        image::load_from_memory(&bytes).map_err(|e| bad_request(format!("{name}: immagine non valida: {e}")))?;
+        uploads.push((name, bytes));
     }
+    if uploads.is_empty() {
+        return Err(bad_request("campo 'icon' mancante nel form"));
+    }
+    Ok(uploads)
+}
 
-    let bytes = bytes.ok_or_else(|| bad_request("campo 'icon' mancante nel form"))?;
-
-    let image = image::load_from_memory(&bytes)
-        .map_err(|e| bad_request(format!("immagine non valida: {e}")))?;
-
-    std::fs::create_dir_all(&*state.icons_dir).map_err(internal_err)?;
-    let filename = format!("key{key}.{extension}");
-    let file_path = state.icons_dir.join(&filename);
-    std::fs::write(&file_path, &bytes).map_err(internal_err)?;
-    let icon_rel_path = format!("icons/{filename}");
+/// Assegna al tasto l'icona `file` della libreria: la scrive subito sul deck
+/// e la salva in `config.toml`.
+async fn assign_icon(state: &AppState, key: u8, file: &str) -> Result<KeyConfigView, (StatusCode, String)> {
+    let image = image::open(state.icons_dir.join(file))
+        .map_err(|e| bad_request(format!("impossibile aprire l'icona {file}: {e}")))?;
 
     let key_icons = icons::prepare_key_icons(image);
     icons::write_icon_to_device(&state.device, key, key_icons.normal.clone())
@@ -411,10 +408,119 @@ async fn upload_icon_handler(
     state.multi_wake.notify_one();
 
     let mut config = state.config.write().await;
-    config::set_key_icon(&mut config, key, icon_rel_path);
+    config::set_key_icon(&mut config, key, icon_library::config_path(file));
     config::save(&config, &state.config_path).map_err(internal_err)?;
 
-    Ok(Json(key_config_view(&config, key)))
+    Ok(key_config_view(&config, key))
+}
+
+/// Carica un'icona nella libreria e la assegna al tasto.
+async fn upload_icon_handler(
+    State(state): State<AppState>,
+    AxumPath(key): AxumPath<u8>,
+    mut multipart: Multipart,
+) -> Result<Json<KeyConfigView>, (StatusCode, String)> {
+    check_key_range(key)?;
+    let (name, bytes) = read_icon_uploads(&mut multipart).await?.remove(0);
+    let file = icon_library::save(&state.icons_dir, &name, &bytes).map_err(internal_err)?;
+    Ok(Json(assign_icon(&state, key, &file).await?))
+}
+
+#[derive(Debug, Deserialize)]
+struct AssignIconBody {
+    /// Nome del file nella libreria (es. `lampada.png`).
+    file: String,
+}
+
+/// Assegna al tasto un'icona gia' presente nella libreria.
+async fn set_icon_handler(
+    State(state): State<AppState>,
+    AxumPath(key): AxumPath<u8>,
+    Json(body): Json<AssignIconBody>,
+) -> Result<Json<KeyConfigView>, (StatusCode, String)> {
+    check_key_range(key)?;
+    if !icon_library::is_library_file(&body.file) {
+        return Err(bad_request("nome di icona non valido"));
+    }
+    Ok(Json(assign_icon(&state, key, &body.file).await?))
+}
+
+/// Toglie l'icona di un tasto, lasciando il file nella libreria: il tasto si
+/// spegne, salvo che mostri un dato (sistema, luce, pulsante multiplo), che
+/// resta disegnato senza icona.
+async fn clear_icon_handler(
+    State(state): State<AppState>,
+    AxumPath(key): AxumPath<u8>,
+) -> Result<Json<KeyConfigView>, (StatusCode, String)> {
+    check_key_range(key)?;
+
+    let view = {
+        let mut config = state.config.write().await;
+        config::clear_key_icon(&mut config, key);
+        config::save(&config, &state.config_path).map_err(internal_err)?;
+        key_config_view(&config, key)
+    };
+
+    system::restore_key(&state, key).await;
+    state.system_wake.notify_one();
+    state.light_wake.notify_one();
+    state.multi_wake.notify_one();
+
+    Ok(Json(view))
+}
+
+async fn list_icons(state: &AppState) -> Result<Json<Vec<LibraryIcon>>, (StatusCode, String)> {
+    let config = state.config.read().await;
+    icon_library::list(&state.icons_dir, &config).map(Json).map_err(internal_err)
+}
+
+async fn list_icons_handler(State(state): State<AppState>) -> Result<Json<Vec<LibraryIcon>>, (StatusCode, String)> {
+    list_icons(&state).await
+}
+
+/// Aggiunge alla libreria una o piu' icone, senza assegnarle a un tasto.
+async fn upload_library_handler(
+    State(state): State<AppState>,
+    mut multipart: Multipart,
+) -> Result<Json<Vec<LibraryIcon>>, (StatusCode, String)> {
+    for (name, bytes) in read_icon_uploads(&mut multipart).await? {
+        icon_library::save(&state.icons_dir, &name, &bytes).map_err(internal_err)?;
+    }
+    list_icons(&state).await
+}
+
+/// Cancella un'icona dalla libreria, se nessun tasto la usa.
+async fn delete_library_handler(
+    State(state): State<AppState>,
+    AxumPath(file): AxumPath<String>,
+) -> Result<Json<Vec<LibraryIcon>>, (StatusCode, String)> {
+    if !icon_library::is_library_file(&file) {
+        return Err(bad_request("nome di icona non valido"));
+    }
+    {
+        let config = state.config.read().await;
+        let path = icon_library::config_path(&file);
+        let used_by: Vec<String> = config
+            .keys
+            .iter()
+            .filter(|k| k.icon.as_deref() == Some(path.as_str()))
+            .map(|k| k.key.to_string())
+            .collect();
+        if !used_by.is_empty() {
+            return Err((
+                StatusCode::CONFLICT,
+                format!("l'icona e' usata dai tasti {}: toglila prima da li'", used_by.join(", ")),
+            ));
+        }
+        match std::fs::remove_file(state.icons_dir.join(&file)) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Err((StatusCode::NOT_FOUND, "icona non trovata".to_string()));
+            }
+            Err(e) => return Err(internal_err(e)),
+        }
+    }
+    list_icons(&state).await
 }
 
 fn validate_action(action: &Action) -> Result<(), (StatusCode, String)> {
@@ -814,6 +920,7 @@ fn router(state: AppState) -> Router {
         .route("/", get(index_handler))
         .route("/configura", get(configure_handler))
         .route("/impostazioni", get(settings_handler))
+        .route("/icone", get(icons_page_handler))
         .route("/api/status", get(status_handler))
         .route("/ws", get(ws_handler))
         .route(
@@ -822,7 +929,7 @@ fn router(state: AppState) -> Router {
         )
         .route(
             "/api/keys/{key}/icon",
-            axum::routing::post(upload_icon_handler),
+            axum::routing::post(upload_icon_handler).put(set_icon_handler).delete(clear_icon_handler),
         )
         .route(
             "/api/keys/{key}/action",
@@ -853,6 +960,14 @@ fn router(state: AppState) -> Router {
             get(list_home_assistant_services),
         )
         .route("/api/system/metrics", get(list_system_metrics))
+        .route(
+            "/api/icons",
+            get(list_icons_handler).post(upload_library_handler),
+        )
+        .route(
+            "/api/icons/{file}",
+            axum::routing::delete(delete_library_handler),
+        )
         .route(
             "/api/multi",
             get(list_multi_handler).post(create_multi_handler),

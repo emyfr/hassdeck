@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Icone — hassdeck</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f5f5f7;
+    --card-bg: #ffffff;
+    --text: #1c1c1e;
+    --muted: #6e6e73;
+    --border: #e0e0e2;
+    --ok: #1e8e3e;
+    --err: #c5221f;
+    --accent: #0a66ff;
+    --input-bg: #f0f0f2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181a;
+      --card-bg: #232427;
+      --text: #f0f0f2;
+      --muted: #9a9aa0;
+      --border: #3a3b3e;
+      --ok: #3ddc73;
+      --err: #ff6b64;
+      --accent: #4c8dff;
+      --input-bg: #2c2d31;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex;
+    justify-content: center;
+    padding: 2.5rem 1rem;
+  }
+  main {
+    width: 100%;
+    max-width: 720px;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  nav {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 0.5rem;
+  }
+  h1 { font-size: 1.4rem; margin: 0; }
+  nav .links { display: flex; gap: 1rem; }
+  nav a { color: var(--accent); text-decoration: none; font-size: 0.9rem; }
+  nav a:hover { text-decoration: underline; }
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.1rem 1.3rem;
+  }
+  .hint { color: var(--muted); font-size: 0.78rem; margin: 0; }
+  .upload-row { display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap; margin-top: 0.8rem; }
+  input[type="file"] { font-size: 0.85rem; }
+  .status-line { font-size: 0.8rem; color: var(--muted); min-height: 1em; margin-top: 0.5rem; }
+  .status-line.ok { color: var(--ok); }
+  .status-line.err { color: var(--err); }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 0.8rem;
+  }
+  .icon-tile {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 0.8rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.4rem;
+    text-align: center;
+  }
+  .icon-tile img {
+    width: 72px;
+    height: 72px;
+    border-radius: 8px;
+    object-fit: cover;
+    background: #000;
+    border: 1px solid var(--border);
+  }
+  .icon-name { font-size: 0.8rem; font-weight: 600; word-break: break-all; }
+  .icon-usage { font-size: 0.72rem; color: var(--muted); }
+  button {
+    background: transparent;
+    color: var(--err);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.3rem 0.7rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:disabled { color: var(--muted); opacity: 0.5; cursor: default; }
+  .empty { color: var(--muted); font-size: 0.9rem; }
+</style>
+</head>
+<body>
+<main>
+  <nav>
+    <h1>Icone</h1>
+    <div class="links">
+      <a href="/">Monitor</a>
+      <a href="/configura">Configura</a>
+      <a href="/impostazioni">Impostazioni</a>
+      <a href="#" id="logout-link">Esci</a>
+    </div>
+  </nav>
+
+  <div class="card">
+    <p class="hint">Le icone caricate restano sul Raspberry (cartella <code>icons/</code>) e si possono assegnare a più tasti da Configura, con il pulsante "Libreria" di ogni tasto. Anche le icone caricate direttamente su un tasto finiscono qui. Formati: PNG e JPEG; per i tasti luce conviene un PNG con sfondo trasparente. Un'icona usata da un tasto non si può cancellare finché non la togli dal tasto.</p>
+    <div class="upload-row">
+      <input type="file" accept="image/png,image/jpeg" multiple id="upload-input">
+    </div>
+    <div class="status-line" id="status"></div>
+  </div>
+
+  <div class="grid" id="grid"></div>
+</main>
+
+<script>
+// Sessione scaduta o assente: torna alla pagina di login.
+const originalFetch = window.fetch;
+window.fetch = async (...args) => {
+  const res = await originalFetch(...args);
+  if (res.status === 401) location.href = "/login";
+  return res;
+};
+document.getElementById("logout-link").addEventListener("click", async (e) => {
+  e.preventDefault();
+  await originalFetch("/api/auth/logout", { method: "POST" });
+  location.href = "/login";
+});
+
+const grid = document.getElementById("grid");
+
+function setStatus(text, cls = "") {
+  const el = document.getElementById("status");
+  el.textContent = text;
+  el.className = "status-line" + (cls ? " " + cls : "");
+}
+
+function escapeHtml(text) {
+  return text.replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+function usageText(usedBy) {
+  if (!usedBy.length) return "non usata";
+  return (usedBy.length === 1 ? "tasto " : "tasti ") + usedBy.join(", ");
+}
+
+function render(icons) {
+  if (!icons.length) {
+    grid.innerHTML = `<p class="empty">Nessuna icona nella libreria.</p>`;
+    return;
+  }
+  grid.innerHTML = icons.map((icon) => `
+    <div class="icon-tile">
+      <img src="/${escapeHtml(icon.path)}?t=${Date.now()}" alt="">
+      <div class="icon-name">${escapeHtml(icon.file)}</div>
+      <div class="icon-usage">${usageText(icon.used_by)}</div>
+      <button data-file="${escapeHtml(icon.file)}" ${icon.used_by.length ? "disabled title=\"Usata da un tasto: toglila prima da Configura\"" : ""}>Elimina</button>
+    </div>
+  `).join("");
+
+  grid.querySelectorAll("button[data-file]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const file = btn.dataset.file;
+      if (!confirm(`Eliminare ${file} dalla libreria?`)) return;
+      try {
+        const res = await fetch(`/api/icons/${encodeURIComponent(file)}`, { method: "DELETE" });
+        if (!res.ok) throw new Error(await res.text());
+        render(await res.json());
+        setStatus(`${file} eliminata`, "ok");
+      } catch (err) {
+        setStatus("errore: " + err.message, "err");
+      }
+    });
+  });
+}
+
+async function load() {
+  try {
+    const res = await fetch("/api/icons");
+    if (!res.ok) throw new Error(await res.text());
+    render(await res.json());
+  } catch (err) {
+    setStatus("errore: " + err.message, "err");
+  }
+}
+
+document.getElementById("upload-input").addEventListener("change", async (e) => {
+  const files = [...e.target.files];
+  if (!files.length) return;
+  const form = new FormData();
+  files.forEach((file) => form.append("icon", file));
+  setStatus("caricamento…");
+  try {
+    const res = await fetch("/api/icons", { method: "POST", body: form });
+    if (!res.ok) throw new Error(await res.text());
+    render(await res.json());
+    setStatus(files.length === 1 ? "icona aggiunta" : `${files.length} icone aggiunte`, "ok");
+  } catch (err) {
+    setStatus("errore: " + err.message, "err");
+  }
+  e.target.value = "";
+});
+
+load();
+</script>
+</body>
+</html>

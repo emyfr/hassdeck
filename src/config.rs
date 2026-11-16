@@ -215,6 +215,13 @@ pub fn set_key_protected(config: &mut Config, key: u8, protected: bool) {
     }
 }
 
+/// Rimuove l'icona di un tasto, lasciando intatta l'eventuale azione.
+pub fn clear_key_icon(config: &mut Config, key: u8) {
+    if let Some(kc) = config.keys.iter_mut().find(|kc| kc.key == key) {
+        kc.icon = None;
+    }
+}
+
 /// Rimuove l'azione di un tasto, lasciando intatta l'eventuale icona.
 pub fn clear_key_action(config: &mut Config, key: u8) {
     if let Some(kc) = config.keys.iter_mut().find(|kc| kc.key == key) {

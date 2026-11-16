@@ -3,6 +3,7 @@ mod auth;
 mod bar;
 mod config;
 mod hold;
+mod icon_library;
 mod icons;
 mod keymap;
 mod lights;
