@@ -28,3 +28,13 @@ action = { type = "home_assistant", service = "scene.turn_on", entity_id = "scen
 [[keys]]
 key = 11
 action = { type = "light", entity_id = "light.soggiorno", step_pct = 10 }
+
+# Pulsante multiplo "termostato": il tasto up_key alza e down_key abbassa la
+# temperatura impostata di step gradi (facoltativo, se manca si usa quello del
+# termostato). Entrambi i tasti mostrano la temperatura impostata.
+[[multi]]
+type = "climate"
+entity_id = "climate.soggiorno"
+up_key = 3
+down_key = 8
+step = 0.5

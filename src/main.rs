@@ -6,6 +6,7 @@ mod hold;
 mod icons;
 mod keymap;
 mod lights;
+mod multi;
 mod system;
 mod web;
 
@@ -79,6 +80,8 @@ async fn main() -> anyhow::Result<()> {
         system_wake: Arc::new(Notify::new()),
         light_wake: Arc::new(Notify::new()),
         adjusting_lights: Default::default(),
+        multi_wake: Arc::new(Notify::new()),
+        adjusting_climates: Default::default(),
     };
 
     let web_addr = {
@@ -114,6 +117,7 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(bar::run(app_state.clone()));
     tokio::spawn(system::run(app_state.clone()));
     tokio::spawn(lights::run(app_state.clone()));
+    tokio::spawn(multi::run(app_state.clone()));
 
     let (tx, mut rx) = mpsc::unbounded_channel();
     KEY_EVENTS.set(tx).ok();
@@ -135,6 +139,7 @@ async fn main() -> anyhow::Result<()> {
     let holds = hold::HoldTracker::default();
     let light_holds = hold::HoldTracker::default();
     let light_directions = hold::LightDirections::default();
+    let multi_holds = hold::HoldTracker::default();
 
     while let Some((read_index, state)) = rx.recv().await {
         let Some(physical_key) = keymap::physical_key_for_read_index(read_index) else {
@@ -150,6 +155,18 @@ async fn main() -> anyhow::Result<()> {
         if pressed {
             // Mostra subito la variante scurita, se il tasto ha un'icona.
             web::show_key_icon(&app_state, physical_key, true).await;
+
+            // Tasto di un pulsante multiplo: agisce subito alla pressione e
+            // ripete finche' resta premuto (vedi `multi::run_climate_hold`).
+            let in_multi = config::multi_for_key(&*config.read().await, physical_key).is_some();
+            if in_multi {
+                let id = multi_holds.press(physical_key).await;
+                let (multi_holds, app_state) = (multi_holds.clone(), app_state.clone());
+                tokio::spawn(async move {
+                    multi::run_climate_hold(&app_state, physical_key, &multi_holds, id).await;
+                });
+                continue;
+            }
 
             // Un tasto luce usa gia' la pressione prolungata per la
             // luminosita', quindi la protezione non si applica.
@@ -203,6 +220,12 @@ async fn main() -> anyhow::Result<()> {
                 continue;
             }
             None => {}
+        }
+
+        // Pulsante multiplo: ha gia' agito alla pressione.
+        if multi_holds.release(physical_key).await.is_some() {
+            web::show_key_icon(&app_state, physical_key, false).await;
+            continue;
         }
 
         // Tasto luce tenuto premuto: la luminosita' e' gia' stata regolata.

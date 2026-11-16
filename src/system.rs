@@ -11,12 +11,12 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::time::Duration;
 
-use crate::config::Action;
+use crate::config::{self, Action};
 use crate::icons;
 use crate::web::{AppState, KeyEvent};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
-const FONT_DATA: &[u8] = include_bytes!("../assets/fonts/DejaVuSans-Bold.ttf");
+pub(crate) const FONT_DATA: &[u8] = include_bytes!("../assets/fonts/DejaVuSans-Bold.ttf");
 
 const SIZE: u32 = 95;
 const BACKGROUND: [u8; 3] = [18, 18, 22];
@@ -181,7 +181,9 @@ fn draw_centered(img: &mut RgbImage, font: &FontRef, text: &str, size: f32, base
     }
 }
 
-fn render_metric(font: &FontRef, label: &str, value: &str, unit: &str) -> DynamicImage {
+/// Tasto con etichetta in alto, valore al centro e unita' in basso. Usato
+/// anche dai pulsanti multipli (vedi `multi.rs`).
+pub(crate) fn render_metric(font: &FontRef, label: &str, value: &str, unit: &str) -> DynamicImage {
     let mut img = RgbImage::from_pixel(SIZE, SIZE, Rgb(BACKGROUND));
     let max_width = SIZE as f32 - 8.0;
     draw_centered(&mut img, font, label, 17.0, 22.0, max_width, LABEL_COLOR);
@@ -199,9 +201,13 @@ fn format_value(info: &MetricInfo, value: Option<f64>) -> String {
 
 /// Riporta il tasto alla sua icona configurata (o lo spegne) quando smette
 /// di mostrare un dato di sistema (o il livello di una luce, vedi `lights.rs`).
+/// Non tocca i tasti passati a un pulsante multiplo, che li ridisegna lui.
 pub async fn restore_key(state: &AppState, key: u8) {
     let icon = {
         let config = state.config.read().await;
+        if config::multi_for_key(&config, key).is_some() {
+            return;
+        }
         config.keys.iter().find(|k| k.key == key).and_then(|k| k.icon.clone())
     };
     let image = icon.and_then(|path| open_image(path).ok());

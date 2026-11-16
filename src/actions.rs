@@ -112,8 +112,59 @@ pub async fn list_entities(ha: &HomeAssistantConfig) -> anyhow::Result<Vec<Entit
     Ok(entities)
 }
 
+/// Stato di un termostato (entita' `climate`): temperatura impostata e limiti
+/// dichiarati da Home Assistant. `target` e' assente se il termostato usa un
+/// intervallo (`target_temp_low`/`target_temp_high`) invece di un valore solo.
+#[derive(Debug, Clone)]
+pub struct ClimateState {
+    /// Modalita' HVAC (`heat`, `cool`, `off`...) o "unavailable".
+    pub state: String,
+    pub target: Option<f64>,
+    pub step: Option<f64>,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+}
+
 /// Legge lo stato di una singola entita' (`GET /api/states/<entity_id>`).
 pub async fn get_state(ha: &HomeAssistantConfig, entity_id: &str) -> anyhow::Result<EntityState> {
+    let body = fetch_state(ha, entity_id).await?;
+    Ok(EntityState {
+        state: body
+            .get("state")
+            .and_then(|s| s.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        unit: body
+            .get("attributes")
+            .and_then(|a| a.get("unit_of_measurement"))
+            .and_then(|u| u.as_str())
+            .map(str::to_string),
+        brightness: body
+            .get("attributes")
+            .and_then(|a| a.get("brightness"))
+            .and_then(|b| b.as_u64())
+            .map(|b| b.min(255) as u8),
+    })
+}
+
+/// Legge lo stato di un termostato, vedi `ClimateState`.
+pub async fn get_climate_state(ha: &HomeAssistantConfig, entity_id: &str) -> anyhow::Result<ClimateState> {
+    let body = fetch_state(ha, entity_id).await?;
+    let attribute = |name: &str| body.get("attributes").and_then(|a| a.get(name)).and_then(|v| v.as_f64());
+    Ok(ClimateState {
+        state: body
+            .get("state")
+            .and_then(|s| s.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        target: attribute("temperature"),
+        step: attribute("target_temp_step"),
+        min: attribute("min_temp"),
+        max: attribute("max_temp"),
+    })
+}
+
+async fn fetch_state(ha: &HomeAssistantConfig, entity_id: &str) -> anyhow::Result<serde_json::Value> {
     if ha.url.trim().is_empty() || ha.token.trim().is_empty() {
         anyhow::bail!("url o token Home Assistant non impostati (vedi /impostazioni)");
     }
@@ -137,28 +188,10 @@ pub async fn get_state(ha: &HomeAssistantConfig, entity_id: &str) -> anyhow::Res
         anyhow::bail!("Home Assistant ha risposto {status}: {body}");
     }
 
-    let body: serde_json::Value = response
+    response
         .json()
         .await
-        .map_err(|e| anyhow::anyhow!("risposta di Home Assistant non valida: {e}"))?;
-
-    Ok(EntityState {
-        state: body
-            .get("state")
-            .and_then(|s| s.as_str())
-            .unwrap_or_default()
-            .to_string(),
-        unit: body
-            .get("attributes")
-            .and_then(|a| a.get("unit_of_measurement"))
-            .and_then(|u| u.as_str())
-            .map(str::to_string),
-        brightness: body
-            .get("attributes")
-            .and_then(|a| a.get("brightness"))
-            .and_then(|b| b.as_u64())
-            .map(|b| b.min(255) as u8),
-    })
+        .map_err(|e| anyhow::anyhow!("risposta di Home Assistant non valida: {e}"))
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -269,6 +302,21 @@ pub async fn light_brightness_step(
         "light",
         "turn_on",
         serde_json::json!({ "entity_id": entity_id, "brightness_step_pct": step_pct }),
+    )
+    .await
+}
+
+/// Imposta la temperatura obiettivo di un termostato.
+pub async fn set_climate_temperature(
+    ha: &HomeAssistantConfig,
+    entity_id: &str,
+    temperature: f64,
+) -> anyhow::Result<()> {
+    call_service(
+        ha,
+        "climate",
+        "set_temperature",
+        serde_json::json!({ "entity_id": entity_id, "temperature": temperature }),
     )
     .await
 }

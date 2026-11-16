@@ -18,10 +18,11 @@ use tokio::sync::{broadcast, Notify, RwLock};
 use crate::actions;
 use crate::auth::{self, Auth};
 use crate::bar::{BarStatus, SharedBarStatus};
-use crate::config::{self, Action, BarConfig, Config, HomeAssistantConfig};
+use crate::config::{self, Action, BarConfig, Config, HomeAssistantConfig, MultiButton};
 use crate::hold::{self, HoldTracker, LightDirections};
 use crate::icons::{self, IconCache};
 use crate::lights::{self, AdjustingLights};
+use crate::multi::{self, AdjustingClimates};
 use crate::system;
 use mirajazz::device::Device;
 
@@ -87,6 +88,9 @@ pub struct AppState {
     /// Sveglia il task dei tasti luce per rileggere subito lo stato delle luci.
     pub light_wake: Arc<Notify>,
     pub adjusting_lights: AdjustingLights,
+    /// Sveglia il task dei pulsanti multipli per ridisegnarne subito i tasti.
+    pub multi_wake: Arc<Notify>,
+    pub adjusting_climates: AdjustingClimates,
 }
 
 /// Durata (ms) del lampeggio "premuto" mostrato quando il tasto viene
@@ -134,15 +138,23 @@ pub async fn run_key_action(state: &AppState, physical_key: u8) {
         at_unix: now_unix(),
     });
 
-    let (action, ha) = {
+    let (action, ha, in_multi) = {
         let config = state.config.read().await;
         let action = config
             .keys
             .iter()
             .find(|k| k.key == physical_key)
             .and_then(|k| k.action.clone());
-        (action, config.home_assistant.clone())
+        let in_multi = config::multi_for_key(&config, physical_key).is_some();
+        (action, config.home_assistant.clone(), in_multi)
     };
+
+    // Tasto di un pulsante multiplo attivato da web: un passo solo, dato che
+    // nessuna pressione resta in corso.
+    if in_multi {
+        multi::run_climate_hold(state, physical_key, &HoldTracker::default(), 0).await;
+        return;
+    }
 
     let Some(action) = action else {
         println!("Tasto {physical_key} premuto, nessuna azione configurata");
@@ -246,7 +258,7 @@ async fn adjust_light(
 }
 
 /// Registra l'esito di un'azione nello stato e lo inoltra ai client web.
-async fn record_action_result(state: &AppState, physical_key: u8, result: anyhow::Result<()>) {
+pub(crate) async fn record_action_result(state: &AppState, physical_key: u8, result: anyhow::Result<()>) {
     let (success, message) = match &result {
         Ok(()) => (true, "OK".to_string()),
         Err(e) => (false, e.to_string()),
@@ -334,6 +346,8 @@ struct KeyConfigView {
     icon: Option<String>,
     action: Option<Action>,
     protected: bool,
+    /// Il tasto fa parte di un pulsante multiplo, che ne decide contenuto e pressione.
+    multi: bool,
 }
 
 fn key_config_view(config: &Config, key: u8) -> KeyConfigView {
@@ -343,6 +357,7 @@ fn key_config_view(config: &Config, key: u8) -> KeyConfigView {
         icon: existing.and_then(|kc| kc.icon.clone()),
         action: existing.and_then(|kc| kc.action.clone()),
         protected: existing.is_some_and(|kc| kc.protected),
+        multi: config::multi_for_key(config, key).is_some(),
     }
 }
 
@@ -390,8 +405,10 @@ async fn upload_icon_handler(
         .await
         .map_err(internal_err)?;
     state.icon_cache.write().await.insert(key, key_icons);
-    // Un tasto luce ridisegna il livello sotto la nuova icona.
+    // Un tasto luce ridisegna il livello sotto la nuova icona, quello di un
+    // pulsante multiplo il suo contenuto al posto dell'icona.
     state.light_wake.notify_one();
+    state.multi_wake.notify_one();
 
     let mut config = state.config.write().await;
     config::set_key_icon(&mut config, key, icon_rel_path);
@@ -454,6 +471,11 @@ async fn set_action_handler(
     validate_action(&action)?;
 
     let mut config = state.config.write().await;
+    if config::multi_for_key(&config, key).is_some() {
+        return Err(bad_request(format!(
+            "il tasto {key} fa parte di un pulsante multiplo: toglilo prima da li'"
+        )));
+    }
     config::set_key_action(&mut config, key, action);
     config::save(&config, &state.config_path).map_err(internal_err)?;
     state.system_wake.notify_one();
@@ -628,6 +650,100 @@ async fn clear_bar_handler(
     Ok(Json(bar_view(&state).await))
 }
 
+/// Controlla un pulsante multiplo prima di salvarlo in posizione `index`
+/// (`None` se e' nuovo): tasti validi e non gia' usati da un altro gruppo.
+fn validate_multi(config: &Config, index: Option<usize>, multi: &MultiButton) -> Result<(), (StatusCode, String)> {
+    match multi {
+        MultiButton::Climate { entity_id, up_key, down_key, step } => {
+            if !entity_id.starts_with("climate.") {
+                return Err(bad_request("entity_id deve essere un termostato (es. climate.soggiorno)"));
+            }
+            if up_key == down_key {
+                return Err(bad_request("i tasti per alzare e abbassare devono essere diversi"));
+            }
+            if let Some(step) = step {
+                if !(step.is_finite() && *step > 0.0 && *step <= 5.0) {
+                    return Err(bad_request("il passo deve essere tra 0,1 e 5 gradi"));
+                }
+            }
+        }
+    }
+    for key in multi.keys() {
+        check_key_range(key)?;
+        let taken = config
+            .multi
+            .iter()
+            .enumerate()
+            .any(|(i, other)| Some(i) != index && other.keys().contains(&key));
+        if taken {
+            return Err(bad_request(format!("il tasto {key} fa gia' parte di un altro pulsante multiplo")));
+        }
+    }
+    Ok(())
+}
+
+async fn list_multi_handler(State(state): State<AppState>) -> Json<Vec<MultiButton>> {
+    Json(state.config.read().await.multi.clone())
+}
+
+/// Salva il pulsante multiplo in posizione `index` (in coda se `None`). I
+/// tasti che usa perdono l'azione propria, che non verrebbe piu' eseguita.
+async fn save_multi(
+    state: &AppState,
+    index: Option<usize>,
+    mut multi: MultiButton,
+) -> Result<Json<Vec<MultiButton>>, (StatusCode, String)> {
+    let MultiButton::Climate { entity_id, .. } = &mut multi;
+    *entity_id = entity_id.trim().to_string();
+
+    let mut config = state.config.write().await;
+    if index.is_some_and(|i| i >= config.multi.len()) {
+        return Err((StatusCode::NOT_FOUND, "pulsante multiplo non trovato".to_string()));
+    }
+    validate_multi(&config, index, &multi)?;
+    for key in multi.keys() {
+        config::clear_key_action(&mut config, key);
+    }
+    match index {
+        Some(i) => config.multi[i] = multi,
+        None => config.multi.push(multi),
+    }
+    config::save(&config, &state.config_path).map_err(internal_err)?;
+    state.system_wake.notify_one();
+    state.light_wake.notify_one();
+    state.multi_wake.notify_one();
+    Ok(Json(config.multi.clone()))
+}
+
+async fn create_multi_handler(
+    State(state): State<AppState>,
+    Json(multi): Json<MultiButton>,
+) -> Result<Json<Vec<MultiButton>>, (StatusCode, String)> {
+    save_multi(&state, None, multi).await
+}
+
+async fn update_multi_handler(
+    State(state): State<AppState>,
+    AxumPath(index): AxumPath<usize>,
+    Json(multi): Json<MultiButton>,
+) -> Result<Json<Vec<MultiButton>>, (StatusCode, String)> {
+    save_multi(&state, Some(index), multi).await
+}
+
+async fn delete_multi_handler(
+    State(state): State<AppState>,
+    AxumPath(index): AxumPath<usize>,
+) -> Result<Json<Vec<MultiButton>>, (StatusCode, String)> {
+    let mut config = state.config.write().await;
+    if index >= config.multi.len() {
+        return Err((StatusCode::NOT_FOUND, "pulsante multiplo non trovato".to_string()));
+    }
+    config.multi.remove(index);
+    config::save(&config, &state.config_path).map_err(internal_err)?;
+    state.multi_wake.notify_one();
+    Ok(Json(config.multi.clone()))
+}
+
 #[derive(Debug, Serialize)]
 struct TestConnectionResult {
     success: bool,
@@ -737,6 +853,14 @@ fn router(state: AppState) -> Router {
             get(list_home_assistant_services),
         )
         .route("/api/system/metrics", get(list_system_metrics))
+        .route(
+            "/api/multi",
+            get(list_multi_handler).post(create_multi_handler),
+        )
+        .route(
+            "/api/multi/{index}",
+            axum::routing::put(update_multi_handler).delete(delete_multi_handler),
+        )
         .route(
             "/api/bar",
             get(get_bar_handler).put(set_bar_handler).delete(clear_bar_handler),

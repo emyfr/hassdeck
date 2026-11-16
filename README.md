@@ -116,6 +116,29 @@ action = { type = "light", entity_id = "light.soggiorno", step_pct = 10 }
 Su questi tasti l'opzione "protetto" non si applica, perché la pressione prolungata serve già a
 regolare la luminosità.
 
+## Pulsanti multipli
+
+Un pulsante multiplo usa più tasti insieme per controllare una sola entità. Il primo tipo è il
+termostato: un tasto alza e uno abbassa la temperatura impostata di un'entità `climate`
+(`climate.set_temperature`). Un tocco cambia la temperatura di un passo; tenendo premuto, dopo mezzo
+secondo il passo si ripete ogni 0,4 secondi finché non rilasci o non arrivi al minimo o al massimo del
+termostato. Entrambi i tasti mostrano una freccia, la temperatura impostata e la modalità (CALDO,
+FREDDO, AUTO, SPENTO…), aggiornate ogni 2 secondi anche quando la temperatura cambia altrove.
+Si configura da `/configura` (card "Pulsanti multipli") oppure in `config.toml`:
+
+```toml
+[[multi]]
+type = "climate"
+entity_id = "climate.soggiorno"
+up_key = 3
+down_key = 8
+step = 0.5   # facoltativo: se manca si usa il passo dichiarato dal termostato
+```
+
+I tasti di un pulsante multiplo non hanno un'azione propria (salvando il gruppo dall'interfaccia,
+l'azione che avevano viene rimossa) e l'opzione "protetto" non si applica. I termostati regolati per
+intervallo (`target_temp_low`/`target_temp_high`) non sono supportati.
+
 ## Dati di sistema sui tasti
 
 Oltre a eseguire un'azione (Home Assistant o chiamata URL), un tasto può mostrare un dato del

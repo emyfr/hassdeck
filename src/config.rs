@@ -14,6 +14,41 @@ pub struct Config {
     /// Barra verticale come indicatore di livello di un sensore, vedi `bar.rs`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bar: Option<BarConfig>,
+    /// Pulsanti multipli: controlli che usano piu' tasti insieme, vedi `multi.rs`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub multi: Vec<MultiButton>,
+}
+
+/// Controllo distribuito su piu' tasti. I tasti di un pulsante multiplo non
+/// hanno un'azione propria: pressione e contenuto mostrato dipendono dal
+/// gruppo.
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum MultiButton {
+    /// Termostato: `up_key` alza e `down_key` abbassa la temperatura impostata
+    /// di `step` gradi (se assente, il passo dichiarato dall'entita'). Entrambi
+    /// i tasti mostrano la temperatura impostata.
+    Climate {
+        entity_id: String,
+        up_key: u8,
+        down_key: u8,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        step: Option<f64>,
+    },
+}
+
+impl MultiButton {
+    /// Tasti occupati dal pulsante multiplo.
+    pub fn keys(&self) -> Vec<u8> {
+        match self {
+            MultiButton::Climate { up_key, down_key, .. } => vec![*up_key, *down_key],
+        }
+    }
+}
+
+/// Pulsante multiplo che usa il tasto `key`, se ce n'e' uno.
+pub fn multi_for_key(config: &Config, key: u8) -> Option<&MultiButton> {
+    config.multi.iter().find(|m| m.keys().contains(&key))
 }
 
 /// Sensore mostrato sulla barra verticale: la barra si riempie dal basso in
@@ -184,5 +219,37 @@ pub fn set_key_protected(config: &mut Config, key: u8, protected: bool) {
 pub fn clear_key_action(config: &mut Config, key: u8) {
     if let Some(kc) = config.keys.iter_mut().find(|kc| kc.key == key) {
         kc.action = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn multi_climate_round_trips_through_toml() {
+        let text = r#"
+[[multi]]
+type = "climate"
+entity_id = "climate.soggiorno"
+up_key = 3
+down_key = 8
+step = 0.5
+"#;
+        let config: Config = toml::from_str(text).unwrap();
+        assert_eq!(
+            config.multi,
+            vec![MultiButton::Climate {
+                entity_id: "climate.soggiorno".to_string(),
+                up_key: 3,
+                down_key: 8,
+                step: Some(0.5),
+            }]
+        );
+        assert_eq!(multi_for_key(&config, 8), config.multi.first());
+        assert_eq!(multi_for_key(&config, 4), None);
+
+        let saved: Config = toml::from_str(&toml::to_string_pretty(&config).unwrap()).unwrap();
+        assert_eq!(saved.multi, config.multi);
     }
 }

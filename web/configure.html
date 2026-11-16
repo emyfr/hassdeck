@@ -188,6 +188,12 @@
   .bar-title { font-weight: 700; }
   .bar-range label { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; color: var(--muted); }
   .bar-range input { width: 110px; }
+  .multi-badge { flex-direction: column; font-size: 0.8rem; line-height: 1.2; }
+  .multi-group { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.8rem 0; border-top: 1px solid var(--border); }
+  .multi-group:first-child { border-top: none; padding-top: 0; }
+  .multi-group label { display: flex; align-items: center; gap: 0.3rem; font-size: 0.85rem; color: var(--muted); white-space: nowrap; }
+  .multi-group .step-input { width: 72px; }
+  .multi-note { font-size: 0.85rem; color: var(--muted); }
 </style>
 </head>
 <body>
@@ -217,6 +223,16 @@
         <button class="secondary" id="bar-clear-btn">Disattiva</button>
       </div>
       <div class="status-line" id="bar-status"></div>
+    </div>
+  </div>
+
+  <div class="key-card" id="multi">
+    <div class="key-badge multi-badge"><span>▲</span><span>▼</span></div>
+    <div class="key-body">
+      <div class="bar-title">Pulsanti multipli</div>
+      <p class="hint" style="margin:0;">Controlli che usano più tasti insieme. Termostato: un tasto alza e uno abbassa la temperatura impostata di un'entità climate, di un passo a ogni tocco e ripetendo finché tieni premuto; entrambi i tasti mostrano la temperatura impostata e la modalità. Il passo vuoto usa quello dichiarato dal termostato. I tasti scelti perdono l'azione che avevano.</p>
+      <div id="multi-list"></div>
+      <div><button class="secondary" id="multi-add-btn">Aggiungi termostato</button></div>
     </div>
   </div>
 
@@ -250,6 +266,8 @@ const ACTIONABLE_DOMAINS = new Set([
 let ENTITIES = [];
 // Luci, proposte per l'azione "Luce".
 let LIGHTS = [];
+// Termostati, proposti per il pulsante multiplo.
+let CLIMATES = [];
 // Sensori numerici (con unità di misura), proposti per la barra verticale.
 let SENSORS = [];
 let entitiesError = null;
@@ -262,12 +280,14 @@ async function loadEntities() {
     ENTITIES = all.filter((e) => ACTIONABLE_DOMAINS.has(entityDomain(e.entity_id)));
     SENSORS = all.filter((e) => entityDomain(e.entity_id) === "sensor" && e.unit_of_measurement);
     LIGHTS = all.filter((e) => entityDomain(e.entity_id) === "light");
+    CLIMATES = all.filter((e) => entityDomain(e.entity_id) === "climate");
     entitiesError = null;
   } catch (err) {
     entitiesError = err.message;
     ENTITIES = [];
     SENSORS = [];
     LIGHTS = [];
+    CLIMATES = [];
   }
 }
 
@@ -451,6 +471,18 @@ const HTTP_METHODS = ["POST", "GET", "PUT", "PATCH", "DELETE"];
 
 const PROTECT_TITLE = "Se attivo, un tocco non fa nulla: serve tenere premuto il tasto per 2 secondi";
 const PROTECT_LIGHT_TITLE = "Non disponibile per le luci: la pressione prolungata regola la luminosità";
+const PROTECT_MULTI_TITLE = "Non disponibile per i pulsanti multipli: la pressione prolungata ripete la regolazione";
+
+// Pulsanti multipli salvati (da /api/multi) e tasti con la loro azione (da /api/keys).
+let MULTI = [];
+let KEYS = [];
+
+function multiKeyNote(key) {
+  const group = MULTI.find((m) => m.up_key === key || m.down_key === key);
+  if (!group) return "Fa parte di un pulsante multiplo.";
+  const verb = group.up_key === key ? "▲ alza" : "▼ abbassa";
+  return `Pulsante multiplo: ${verb} la temperatura di ${entityLabel(group.entity_id, CLIMATES)}. Configuralo nella card "Pulsanti multipli".`;
+}
 
 // entity_id scelto nel campo entità dentro `scope` (tendina o testo libero).
 function entityValueIn(scope) {
@@ -481,13 +513,16 @@ function keyCardMarkup(k) {
   const isLight = type === "light";
   const isHa = !isNone && !isUrl && !isSystem && !isLight;
   const method = action.method || "POST";
+  // I tasti di un pulsante multiplo non hanno un'azione propria.
+  const multiNote = k.multi ? multiKeyNote(k.key) : "";
+  const noProtect = isLight || k.multi;
 
   return `
     <div class="key-card" data-key="${k.key}">
       <div class="key-side">
         <div class="key-badge">${k.key}</div>
-        <label class="protect-toggle" title="${isLight ? PROTECT_LIGHT_TITLE : PROTECT_TITLE}">
-          <input type="checkbox" class="protect-input" ${k.protected ? "checked" : ""} ${isLight ? "disabled" : ""}>
+        <label class="protect-toggle" title="${k.multi ? PROTECT_MULTI_TITLE : isLight ? PROTECT_LIGHT_TITLE : PROTECT_TITLE}">
+          <input type="checkbox" class="protect-input" ${k.protected ? "checked" : ""} ${noProtect ? "disabled" : ""}>
           protetto
         </label>
       </div>
@@ -496,7 +531,8 @@ function keyCardMarkup(k) {
           ${iconPreviewMarkup(k.icon)}
           <input type="file" accept="image/*" class="icon-input">
         </div>
-        <div class="action-row">
+        ${multiNote ? `<div class="multi-note">${escapeHtml(multiNote)}</div>` : ""}
+        <div class="action-row" style="display:${k.multi ? "none" : "flex"}">
           <select class="action-type">
             <option value="" ${isNone ? "selected" : ""}>— nessuna —</option>
             <option value="home_assistant" ${isHa ? "selected" : ""}>Home Assistant</option>
@@ -554,7 +590,7 @@ function attachIconHandler(card, key, statusEl) {
   });
 }
 
-async function loadKeys() {
+async function loadCatalogs() {
   await Promise.all([loadEntities(), loadServices(), loadMetrics()]);
   const entitiesHintEl = document.getElementById("entities-hint");
   const hintMessages = [];
@@ -564,10 +600,13 @@ async function loadKeys() {
     entitiesHintEl.textContent = "Impossibile caricare da Home Assistant: " + hintMessages.join(", ") + " — inserisci service/entity_id a mano, o controlla /impostazioni.";
     entitiesHintEl.style.display = "block";
   }
+}
 
-  const res = await fetch("/api/keys");
-  const keys = await res.json();
-  container.innerHTML = keys.map(keyCardMarkup).join("");
+async function loadKeys() {
+  const [keysRes, multiRes] = await Promise.all([fetch("/api/keys"), fetch("/api/multi")]);
+  KEYS = await keysRes.json();
+  MULTI = await multiRes.json();
+  container.innerHTML = KEYS.map(keyCardMarkup).join("");
 
   container.querySelectorAll(".key-card").forEach((card) => {
     const key = card.dataset.key;
@@ -805,7 +844,115 @@ document.getElementById("bar-clear-btn").addEventListener("click", async () => {
   }
 });
 
-loadKeys().then(loadBar);
+function keyOptionsMarkup(current) {
+  let options = `<option value="">--</option>`;
+  for (let key = 1; key <= 15; key++) {
+    options += `<option value="${key}" ${key === current ? "selected" : ""}>${key}</option>`;
+  }
+  return options;
+}
+
+function multiGroupMarkup(group, index) {
+  return `
+    <div class="multi-group" data-index="${index}">
+      <div class="action-row">
+        <select class="multi-type"><option value="climate" selected>Termostato</option></select>
+        <div class="action-fields climate-fields">
+          ${entityFieldMarkup(group.entity_id || "", CLIMATES, "climate.soggiorno")}
+        </div>
+      </div>
+      <div class="action-row">
+        <label>▲ alza: tasto <select class="up-key">${keyOptionsMarkup(group.up_key)}</select></label>
+        <label>▼ abbassa: tasto <select class="down-key">${keyOptionsMarkup(group.down_key)}</select></label>
+        <label title="Gradi per ogni passo; vuoto = passo del termostato">passo
+          <input type="number" class="step-input" min="0.1" max="5" step="0.1" placeholder="auto" value="${group.step ?? ""}">°</label>
+        <button class="save-multi-btn">Salva</button>
+        <button class="secondary delete-multi-btn">Elimina</button>
+      </div>
+      <div class="status-line"></div>
+    </div>
+  `;
+}
+
+// Rende la lista dei pulsanti multipli; `draft` e' un gruppo nuovo non ancora salvato.
+function renderMulti(draft = null) {
+  const list = document.getElementById("multi-list");
+  const groups = draft ? [...MULTI, draft] : MULTI;
+  list.innerHTML = groups.length
+    ? groups.map(multiGroupMarkup).join("")
+    : `<p class="hint" style="margin:0;">Nessun pulsante multiplo.</p>`;
+  list.querySelectorAll(".multi-group").forEach((el) => {
+    const index = parseInt(el.dataset.index, 10);
+    const isNew = index >= MULTI.length;
+    const statusEl = el.querySelector(".status-line");
+    const setStatus = (text, cls = "") => {
+      statusEl.textContent = text;
+      statusEl.className = "status-line" + (cls ? " " + cls : "");
+    };
+
+    const combo = el.querySelector(".entity-combo");
+    if (combo) setupEntityCombo(combo, null, CLIMATES);
+
+    el.querySelector(".save-multi-btn").addEventListener("click", async () => {
+      const entity_id = entityValueIn(el);
+      const up_key = parseInt(el.querySelector(".up-key").value, 10);
+      const down_key = parseInt(el.querySelector(".down-key").value, 10);
+      const stepText = el.querySelector(".step-input").value.trim();
+      const step = stepText === "" ? null : parseFloat(stepText.replace(",", "."));
+      if (!entity_id) return setStatus("scegli un termostato", "err");
+      if (!up_key || !down_key) return setStatus("scegli i due tasti", "err");
+      if (up_key === down_key) return setStatus("i due tasti devono essere diversi", "err");
+      if (step !== null && !(step > 0 && step <= 5)) return setStatus("il passo deve essere tra 0,1 e 5", "err");
+
+      const withAction = KEYS.filter((k) => (k.key === up_key || k.key === down_key) && k.action);
+      if (withAction.length) {
+        const names = withAction.map((k) => k.key).join(" e ");
+        const plural = withAction.length > 1;
+        if (!confirm(`${plural ? "I tasti" : "Il tasto"} ${names} ${plural ? "hanno" : "ha"} già un'azione, che verrà rimossa. Continuare?`)) return;
+      }
+
+      const body = { type: "climate", entity_id, up_key, down_key };
+      if (step !== null) body.step = step;
+      setStatus("salvataggio…");
+      try {
+        const res = await fetch(isNew ? "/api/multi" : `/api/multi/${index}`, {
+          method: isNew ? "POST" : "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        await loadKeys();
+        renderMulti();
+        const saved = document.querySelector(`.multi-group[data-index="${index}"] .status-line`);
+        if (saved) {
+          saved.textContent = "termostato salvato";
+          saved.className = "status-line ok";
+        }
+      } catch (err) {
+        setStatus("errore: " + err.message, "err");
+      }
+    });
+
+    el.querySelector(".delete-multi-btn").addEventListener("click", async () => {
+      if (isNew) return renderMulti();
+      try {
+        const res = await fetch(`/api/multi/${index}`, { method: "DELETE" });
+        if (!res.ok) throw new Error(await res.text());
+        await loadKeys();
+        renderMulti();
+      } catch (err) {
+        setStatus("errore: " + err.message, "err");
+      }
+    });
+  });
+}
+
+document.getElementById("multi-add-btn").addEventListener("click", () => {
+  if (document.querySelector(`.multi-group[data-index="${MULTI.length}"]`)) return;
+  renderMulti({ type: "climate", entity_id: "" });
+});
+
+loadCatalogs().then(loadKeys).then(() => renderMulti()).then(loadBar);
 </script>
 </body>
 </html>
